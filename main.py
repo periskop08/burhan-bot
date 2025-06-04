@@ -56,7 +56,6 @@ def webhook():
             take_profit=float(tp),
             time_in_force="GoodTillCancel"
         )
-
         print("Emir gönderildi:", order)
     except Exception as e:
         print("Emir gönderilirken hata oluştu:", e)
