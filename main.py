@@ -29,7 +29,7 @@ def webhook():
 
     print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
-    # Buraya Bybit API emir entegrasyonu eklenecek
+    # Buraya Bybit API entegrasyonu eklenecek
     # bybit.place_order(symbol, side, entry, sl, tp, quantity)
 
     return jsonify({
@@ -43,8 +43,4 @@ def webhook():
     }), 200
 
 if __name__ == "__main__":
-<<<<<<< HEAD
     app.run(debug=True)
-=======
-    app.run(debug=True)
->>>>>>> 91763ee (main.py güncellendi - risk hesaplama entegre)
