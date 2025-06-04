@@ -19,11 +19,9 @@ def webhook():
     sl = data.get("sl")
     tp = data.get("tp")
 
-    # Eksik veri varsa hata ver
     if not all([symbol, side, entry, sl, tp]):
         return jsonify({"status": "error", "message": "Eksik veri: entry, sl veya tp eksik."}), 400
 
-    # Sayıya çevir
     try:
         entry = float(entry)
         sl = float(sl)
@@ -31,7 +29,6 @@ def webhook():
     except ValueError:
         return jsonify({"status": "error", "message": "Entry, SL veya TP sayıya çevrilemedi."}), 400
 
-    # Risk hesaplama
     risk_dolar = 10.0
     risk_per_unit = abs(entry - sl)
     if risk_per_unit == 0:
@@ -41,18 +38,20 @@ def webhook():
 
     print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
-    # BYBIT API EMİR GÖNDER (gerçek hesap)
     session = HTTP(api_key=api_key, api_secret=api_secret, testnet=False)
 
     try:
         order = session.place_order(
-    category="linear",
-    symbol=symbol,
-    side="Buy" if side.lower() == "long" else "Sell",
-    order_type="Market",
-    qty=quantity,
-    time_in_force="GoodTillCancel"
-)
+            category="linear",
+            symbol=symbol,
+            side="Buy" if side.lower() == "long" else "Sell",
+            order_type="Market",
+            qty=quantity,
+            position_idx=1,
+            take_profit=tp,
+            stop_loss=sl,
+            time_in_force="GoodTillCancel"
+        )
         print("Emir gönderildi:", order)
     except Exception as e:
         print("Emir gönderilirken hata oluştu:", e)
