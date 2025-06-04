@@ -49,9 +49,8 @@ def webhook():
             category="linear",
             symbol=symbol,
             side="Buy" if side.lower() == "long" else "Sell",
-            order_type="Limit",
+            order_type="Market",
             qty=float(quantity),
-            price=float(entry),
             stop_loss=float(sl),
             take_profit=float(tp),
             time_in_force="GoodTillCancel"
