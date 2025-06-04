@@ -39,7 +39,7 @@ def webhook():
     print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
     # BYBIT API EMİR GÖNDER
-    session = HTTP(api_key=api_key, api_secret=api_secret, testnet=True)
+    session = HTTP(api_key=api_key, api_secret=api_secret, testnet=False)
 
     try:
         order = session.place_order(
