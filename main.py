@@ -1,10 +1,12 @@
 from flask import Flask, request, jsonify
+from pybit.unified_trading import HTTP
+from config import api_key, api_secret
 
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Burhan-Bot aktif 🎯"
+    return "Burhan-Bot aktif 💪"
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -17,29 +19,43 @@ def webhook():
     sl = data.get("sl")
     tp = data.get("tp")
 
-    # Eğer bu bilgiler eksikse hata döndür
+    # Eksik veri varsa hata ver
     if not all([symbol, side, entry, sl, tp]):
-        return jsonify({"status": "error", "message": "Eksik veri: entry, sl veya tp boş geldi."}), 400
+        return jsonify({"status": "error", "message": "Eksik veri: entry, sl veya tp eksik."}), 400
 
     # Sayıya çevir
     entry = float(entry)
     sl = float(sl)
     tp = float(tp)
 
-    # Risk başına pozisyon büyüklüğü hesaplama
+    # Risk hesaplama
     risk_dolar = 10.0
     risk_per_unit = abs(entry - sl)
-
     if risk_per_unit == 0:
-        return jsonify({"status": "error", "message": "Giriş ve SL aynı, pozisyon büyüklüğü hesaplanamaz."}), 400
+        return jsonify({"status": "error", "message": "Entry ve SL aynı, pozisyon büyüklüğü hesaplanamaz."}), 400
 
-    quantity = risk_dolar / risk_per_unit
-    quantity = round(quantity, 3)
+    quantity = round(risk_dolar / risk_per_unit, 3)
 
     print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
-    place_order(symbol, side, entry, sl, tp, quantity)
+    # BYBIT API EMİR GÖNDER
+    session = HTTP(api_key=api_key, api_secret=api_secret, testnet=True)
 
+    try:
+        order = session.place_order(
+            category="linear",
+            symbol=symbol,
+            side="Buy" if side.lower() == "long" else "Sell",
+            order_type="Limit",
+            qty=quantity,
+            price=entry,
+            stop_loss=sl,
+            take_profit=tp,
+            time_in_force="GoodTillCancel"
+        )
+        print("Emir gönderildi:", order)
+    except Exception as e:
+        print("Emir gönderilirken hata oluştu:", e)
 
     return jsonify({
         "status": "ok",
@@ -53,26 +69,3 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-    from pybit.unified_trading import HTTP
-from config import api_key, api_secret, base_url
-
-session = HTTP(api_key=api_key, api_secret=api_secret, testnet=True)
-
-def place_order(symbol, side, entry, sl, tp, qty):
-    try:
-        response = session.place_order(
-            category="linear",  # USDT pariteleri için
-            symbol=symbol,
-            side="Buy" if side.lower() == "long" else "Sell",
-            order_type="Limit",
-            qty=qty,
-            price=entry,
-            take_profit=tp,
-            stop_loss=sl,
-            time_in_force="GoodTillCancel",
-            reduce_only=False
-        )
-        print("Bybit Yanıtı:", response)
-    except Exception as e:
-        print("Bybit Hatası:", str(e))
