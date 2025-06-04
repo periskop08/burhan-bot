@@ -50,10 +50,10 @@ def webhook():
     symbol=symbol,
     side="Buy" if side.lower() == "long" else "Sell",
     order_type="Limit",
-    qty=float(quantity),
-    price=float(entry),
-    stop_loss=float(sl),
-    take_profit=float(tp),
+   qty=float(quantity),
+price=float(entry),
+stop_loss=float(sl),
+take_profit=float(tp),
     time_in_force="GoodTillCancel"
 )
         print("Emir gönderildi:", order)
