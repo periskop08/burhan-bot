@@ -43,8 +43,4 @@ def webhook():
     }), 200
 
 if __name__ == "__main__":
-<<<<<<< HEAD
     app.run(debug=True)
-=======
-    app.run(debug=True)
->>>>>>> 91763ee (main.py güncellendi - risk hesaplama entegre)
