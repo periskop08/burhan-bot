@@ -1,2 +1,3 @@
-api_key = "QyUzj81ow6LsudkpZM"
-api_secret = "QvVUNtcufFkkp0fwlASaQAbyrbpYVuMvucRi"
+api_key = "suAMLVASjzlMrgZwPZ"
+api_secret = "1uZ0ltTtfZYd3isz67yG7K85K7pnKyVEv5fz"
+testnet=False
