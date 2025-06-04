@@ -46,15 +46,13 @@ def webhook():
 
     try:
         order = session.place_order(
-            category="linear",
-            symbol=symbol,
-            side="Buy" if side.lower() == "long" else "Sell",
-            order_type="Market",
-            qty=float(quantity),
-            stop_loss=float(sl),
-            take_profit=float(tp),
-            time_in_force="GoodTillCancel"
-        )
+    category="linear",
+    symbol=symbol,
+    side="Buy" if side.lower() == "long" else "Sell",
+    order_type="Market",
+    qty=quantity,
+    time_in_force="GoodTillCancel"
+)
         print("Emir gönderildi:", order)
     except Exception as e:
         print("Emir gönderilirken hata oluştu:", e)
