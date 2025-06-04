@@ -11,20 +11,20 @@ def webhook():
     data = request.get_json()
     print("Webhook verisi alındı:", data)
 
-  symbol = data.get("symbol")
-side = data.get("side")
-entry = data.get("entry")
-sl = data.get("sl")
-tp = data.get("tp")
+    symbol = data.get("symbol")
+    side = data.get("side")
+    entry = data.get("entry")
+    sl = data.get("sl")
+    tp = data.get("tp")
 
-# Eğer bu bilgiler eksikse hata döndür
-if not all([symbol, side, entry, sl, tp]):
-    return jsonify({"status": "error", "message": "Eksik veri: entry, sl veya tp boş geldi."}), 400
+    # Eğer bu bilgiler eksikse hata döndür
+    if not all([symbol, side, entry, sl, tp]):
+        return jsonify({"status": "error", "message": "Eksik veri: entry, sl veya tp boş geldi."}), 400
 
-# Sayıya çevir
-entry = float(entry)
-sl = float(sl)
-tp = float(tp)
+    # Sayıya çevir
+    entry = float(entry)
+    sl = float(sl)
+    tp = float(tp)
 
     # Risk başına pozisyon büyüklüğü hesaplama
     risk_dolar = 10.0
@@ -38,7 +38,7 @@ tp = float(tp)
 
     print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
-    # Buraya Bybit API entegrasyonu eklenecek
+    # Buraya Bybit API emir entegrasyonu eklenecek
     # bybit.place_order(symbol, side, entry, sl, tp, quantity)
 
     return jsonify({
