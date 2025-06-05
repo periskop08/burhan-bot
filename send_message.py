@@ -5,36 +5,34 @@ app = Flask(__name__)
 
 # === Telegram Ayarları ===
 BOT_TOKEN = "7555166060:AAF57LlQMX_K4-RMnktR0jMEsTxcd1FK4jw"
-CHAT_ID = "-4915128956"  # Grubun doğru chat_id'si
-
+CHAT_ID = "-4876457193"
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
 
+MAIN_WEBHOOK = "https://burhan-bot.onrender.com/webhook"
+
 @app.route("/send", methods=["POST"])
-def send_message():
+def send():
     try:
         data = request.get_json()
 
-        # Gelen veriyi ham olarak Telegram grubuna ilet
-        msg = f"{data}"
-
+        # Telegram'a mesaj gönder
         payload = {
             "chat_id": CHAT_ID,
-            "text": msg,
+            "text": f"TradingView verisi geldi:\n\n{data}",
             "parse_mode": "HTML"
         }
+        telegram_response = requests.post(TELEGRAM_URL, json=payload)
 
-        response = requests.post(TELEGRAM_URL, json=payload)
-        print("📩 TradingView verisi geldi:", data)
-        print("📬 Telegram'a mesaj gönderildi:", response.json())
+        # 🧠 Aynı veriyi main.py'ye de POST et!
+        main_response = requests.post(MAIN_WEBHOOK, json=data)
 
-        # 🔁 Veriyi main.py'deki webhook'a gönder
-        webhook_response = requests.post("https://burhan-bot.onrender.com/webhook", json=data)
-        print("🎯 main.py'ye iletim durumu:", webhook_response.status_code)
-
-        return jsonify({"status": "ok", "telegram": response.json()}), 200
+        return jsonify({
+            "status": "ok",
+            "telegram_status": telegram_response.status_code,
+            "main_status": main_response.status_code
+        })
 
     except Exception as e:
-        print("❌ Hata:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
