@@ -29,17 +29,13 @@ def webhook():
     except ValueError:
         return jsonify({"status": "error", "message": "Entry, SL veya TP sayıya çevrilemedi."}), 400
 
-    risk_dolar = 10.0
+    # 💰 Risk ayarları
+    risk_dolar = 16.0  # 160 USDT kasanın 10'da 1'i
     risk_per_unit = abs(entry - sl)
-
     if risk_per_unit == 0:
         return jsonify({"status": "error", "message": "Entry ve SL aynı, pozisyon büyüklüğü hesaplanamaz."}), 400
 
-    # Qty hesaplama: inverse (BTCUSD) için qty doğrudan USD miktarı
-    if symbol.endswith("USD"):
-        quantity = int(risk_dolar)
-    else:
-        quantity = round(risk_dolar / risk_per_unit, 3)
+    quantity = round(risk_dolar / risk_per_unit, 3)
 
     print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
@@ -53,11 +49,11 @@ def webhook():
             order_type="Market",
             qty=quantity,
             time_in_force="GoodTillCancel",
-            # position_idx=1  # One-Way Mode
+            position_idx=1  # One-Way mode
         )
         print("✅ Emir gönderildi:", order)
     except Exception as e:
-        print("❌ Emir gönderilirken hata oluştu:", e)
+        print("🔥 Emir gönderilirken hata oluştu:", e)
 
     return jsonify({
         "status": "ok",
