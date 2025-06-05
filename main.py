@@ -2,9 +2,9 @@ from flask import Flask, request, jsonify
 from pybit.unified_trading import HTTP
 from config import api_key, api_secret
 import requests
+import traceback
 
 TELEGRAM_BOT_TOKEN = "7555166060:AAF57LlQMX_K4-RMnktR0jMEsTxcd1FK4jw"
-
 app = Flask(__name__)
 
 @app.route("/", methods=["GET"])
@@ -14,7 +14,8 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print("📩 Webhook verisi alındı:", data)
+    print("\n📩 Webhook verisi alındı:", data)
+    print("📦 Veri tipi:", type(data))
 
     symbol = data.get("symbol")
     side = data.get("side")
@@ -23,6 +24,7 @@ def webhook():
     tp = data.get("tp")
 
     if not all([symbol, side, entry, sl, tp]):
+        print("❗ Eksik veri:", symbol, side, entry, sl, tp)
         return jsonify({"status": "error", "message": "Eksik veri: entry, sl veya tp eksik."}), 400
 
     try:
@@ -30,16 +32,21 @@ def webhook():
         sl = float(sl)
         tp = float(tp)
     except ValueError:
+        print("❗ Sayıya çevrilemedi:", entry, sl, tp)
         return jsonify({"status": "error", "message": "Entry, SL veya TP sayıya çevrilemedi."}), 400
 
-    risk_dolar = 16.0  # 160 USDT kasanın 10'da 1'i
+    risk_dolar = 16.0
     risk_per_unit = abs(entry - sl)
     if risk_per_unit == 0:
-        return jsonify({"status": "error", "message": "Entry ve SL aynı, pozisyon büyüklüğü hesaplanamaz."}), 400
+        print("❗ Entry ve SL aynı değer, pozisyon açılamaz.")
+        return jsonify({"status": "error", "message": "Entry ve SL aynı."}), 400
 
     quantity = round(risk_dolar / risk_per_unit, 3)
+    if quantity <= 0:
+        print("❗ Miktar sıfır veya negatif:", quantity)
+        return jsonify({"status": "error", "message": "Miktar geçersiz."}), 400
 
-    print(f"📢 EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
+    print(f"📢 EMİR: {side.upper()} | {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
     session = HTTP(api_key=api_key, api_secret=api_secret, testnet=False)
 
@@ -54,8 +61,9 @@ def webhook():
             position_idx=1
         )
         print("✅ Emir gönderildi:", order)
-    except Exception as e:
-        print("🔥 Emir gönderilirken hata oluştu:", e)
+    except Exception:
+        print("🔥 Emir gönderilirken hata oluştu:")
+        traceback.print_exc()
 
     return jsonify({
         "status": "ok",
