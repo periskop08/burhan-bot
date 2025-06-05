@@ -1,3 +1,4 @@
+# ✅ main.py (Bybit emirlerini işleyen ana API)
 from flask import Flask, request, jsonify
 from pybit.unified_trading import HTTP
 from config import api_key, api_secret
@@ -13,7 +14,7 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     raw_data = request.get_json()
-    print("📩 Webhook verisi alındı:", raw_data)
+    print("\U0001F4E9 Webhook verisi alındı:", raw_data)
 
     try:
         data = raw_data
