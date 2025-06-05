@@ -1,6 +1,9 @@
 from flask import Flask, request, jsonify
 from pybit.unified_trading import HTTP
 from config import api_key, api_secret
+import requests
+
+TELEGRAM_BOT_TOKEN = "7555166060:AAF57LlQMX_K4-RMnktR0jMEsTxcd1FK4jw"
 
 app = Flask(__name__)
 
@@ -11,7 +14,7 @@ def home():
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print("Webhook verisi alındı:", data)
+    print("📩 Webhook verisi alındı:", data)
 
     symbol = data.get("symbol")
     side = data.get("side")
@@ -29,7 +32,6 @@ def webhook():
     except ValueError:
         return jsonify({"status": "error", "message": "Entry, SL veya TP sayıya çevrilemedi."}), 400
 
-    # 💰 Risk ayarları
     risk_dolar = 16.0  # 160 USDT kasanın 10'da 1'i
     risk_per_unit = abs(entry - sl)
     if risk_per_unit == 0:
@@ -37,7 +39,7 @@ def webhook():
 
     quantity = round(risk_dolar / risk_per_unit, 3)
 
-    print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
+    print(f"📢 EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
     session = HTTP(api_key=api_key, api_secret=api_secret, testnet=False)
 
@@ -49,7 +51,7 @@ def webhook():
             order_type="Market",
             qty=quantity,
             time_in_force="GoodTillCancel",
-            position_idx=1  # One-Way mode
+            position_idx=1
         )
         print("✅ Emir gönderildi:", order)
     except Exception as e:
@@ -64,6 +66,20 @@ def webhook():
         "tp": tp,
         "quantity": quantity
     }), 200
+
+@app.route("/send", methods=["POST"])
+def send_to_telegram():
+    data = request.get_json()
+    print("📨 TradingView verisi geldi:", data)
+
+    telegram_api = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    try:
+        response = requests.post(telegram_api, json=data)
+        print("📤 Telegram'a mesaj gönderildi:", response.text)
+        return jsonify({"status": "ok", "telegram_status": response.status_code})
+    except Exception as e:
+        print("❌ Telegram mesaj gönderim hatası:", e)
+        return jsonify({"status": "error", "error": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(debug=True)
