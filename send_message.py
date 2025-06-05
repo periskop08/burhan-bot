@@ -15,18 +15,16 @@ def send():
         raw_data = request.get_json()
         print("📨 TradingView verisi geldi:", raw_data)
 
-        # Telegram mesajı için text formatı
+        # Telegram mesajı
         telegram_payload = {
             "chat_id": CHAT_ID,
             "text": json.dumps(raw_data),
             "parse_mode": "HTML"
         }
-
-        # Telegram'a gönder
         telegram_response = requests.post(TELEGRAM_URL, json=telegram_payload)
         print("📤 Telegram'a mesaj gönderildi:", telegram_response.text)
 
-        # Webhook’a ilet
+        # Webhook (main.py)
         webhook_response = requests.post(MAIN_WEBHOOK, json=raw_data)
         print("📡 Webhook'a veri gönderildi:", webhook_response.text)
 
