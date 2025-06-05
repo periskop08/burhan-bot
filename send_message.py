@@ -21,10 +21,10 @@ def send():
             "text": json.dumps(raw_data),
             "parse_mode": "HTML"
         }
+
         telegram_response = requests.post(TELEGRAM_URL, json=telegram_payload)
         print("📤 Telegram'a mesaj gönderildi:", telegram_response.text)
 
-        # Webhook (main.py)
         webhook_response = requests.post(MAIN_WEBHOOK, json=raw_data)
         print("📡 Webhook'a veri gönderildi:", webhook_response.text)
 
