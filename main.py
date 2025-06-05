@@ -42,7 +42,7 @@ def webhook():
 
     try:
         order = session.place_order(
-            category="linear",
+            category="inverse",
             symbol=symbol,
             side="Buy" if side.lower() == "long" else "Sell",
             order_type="Market",
