@@ -73,14 +73,13 @@ def webhook():
         session = HTTP(api_key=api_key, api_secret=api_secret, testnet=False)
 
         order = session.place_order(
-            category="linear",
-            symbol=symbol,
-            side="Buy" if side.lower() == "long" else "Sell",
-            order_type="Market",
-            qty=quantity,
-            time_in_force="GoodTillCancel",
-            position_idx=1
-        )
+    category="linear",
+    symbol=symbol,
+    side="Buy" if side.lower() == "long" else "Sell",
+    order_type="Market",
+    qty=quantity,
+    time_in_force="GoodTillCancel"
+)
         print("✅ Emir gönderildi:", order)
         return jsonify({"status": "ok", "order": order})
 
