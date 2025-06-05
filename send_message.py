@@ -4,45 +4,40 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# === Telegram Ayarları ===
 BOT_TOKEN = "7555166060:AAF57LlQMX_K4-RMnktR0jMEsTxcd1FK4jw"
 CHAT_ID = "-4915128956"
 TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-
-# === Main.py Webhook Adresi ===
 MAIN_WEBHOOK = "https://burhan-bot.onrender.com/webhook"
 
 @app.route("/send", methods=["POST"])
 def send():
     try:
-        data = request.get_json()
+        raw_data = request.get_json()
+        print("📨 TradingView verisi geldi:", raw_data)
 
-        # ✅ Telegram'a düzgün görünmesi için metni stringify et
-        pretty_text = json.dumps(data, indent=2)
-
-        # 📩 Telegram'a mesaj gönder
+        # Telegram mesajı için text formatı
         telegram_payload = {
             "chat_id": CHAT_ID,
-            "text": f"<b>📡 Yeni TradingView Sinyali:</b>\n<pre>{pretty_text}</pre>",
+            "text": json.dumps(raw_data),
             "parse_mode": "HTML"
         }
+
+        # Telegram'a gönder
         telegram_response = requests.post(TELEGRAM_URL, json=telegram_payload)
+        print("📤 Telegram'a mesaj gönderildi:", telegram_response.text)
 
-        # 🧠 main.py webhook'una gönderilecek temiz JSON
-        if "text" in data:
-            clean_data = json.loads(data["text"])  # Text içinden çözümlü JSON
-        else:
-            clean_data = data  # Direkt JSON gönderildiyse
-
-        main_response = requests.post(MAIN_WEBHOOK, json=clean_data)
+        # Webhook’a ilet
+        webhook_response = requests.post(MAIN_WEBHOOK, json=raw_data)
+        print("📡 Webhook'a veri gönderildi:", webhook_response.text)
 
         return jsonify({
             "status": "ok",
             "telegram_status": telegram_response.status_code,
-            "main_status": main_response.status_code
+            "webhook_status": webhook_response.status_code
         })
 
     except Exception as e:
+        print("🔥 Hata:", e)
         return jsonify({"status": "error", "message": str(e)}), 500
 
 if __name__ == "__main__":
