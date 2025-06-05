@@ -31,10 +31,15 @@ def webhook():
 
     risk_dolar = 10.0
     risk_per_unit = abs(entry - sl)
+
     if risk_per_unit == 0:
         return jsonify({"status": "error", "message": "Entry ve SL aynı, pozisyon büyüklüğü hesaplanamaz."}), 400
 
-    quantity = round(risk_dolar / risk_per_unit, 3)
+    # Qty hesaplama: inverse (BTCUSD) için qty doğrudan USD miktarı
+    if symbol.endswith("USD"):
+        quantity = int(risk_dolar)
+    else:
+        quantity = round(risk_dolar / risk_per_unit, 3)
 
     print(f"EMİR: {side.upper()} | Symbol: {symbol} | Entry: {entry} | SL: {sl} | TP: {tp} | Miktar: {quantity}")
 
@@ -50,9 +55,9 @@ def webhook():
             time_in_force="GoodTillCancel",
             position_idx=1  # One-Way Mode
         )
-        print("Emir gönderildi:", order)
+        print("✅ Emir gönderildi:", order)
     except Exception as e:
-        print("Emir gönderilirken hata oluştu:", e)
+        print("❌ Emir gönderilirken hata oluştu:", e)
 
     return jsonify({
         "status": "ok",
