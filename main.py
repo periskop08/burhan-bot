@@ -47,13 +47,13 @@ def webhook():
 
     try:
         order = session.place_order(
-            category="inverse",
+            category="linear",
             symbol=symbol,
             side="Buy" if side.lower() == "long" else "Sell",
             order_type="Market",
             qty=quantity,
             time_in_force="GoodTillCancel",
-            position_idx=1  # One-Way Mode
+            # position_idx=1  # One-Way Mode
         )
         print("✅ Emir gönderildi:", order)
     except Exception as e:
