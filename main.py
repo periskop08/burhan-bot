@@ -9,7 +9,6 @@ import decimal # Finansal hesaplamalarda hassasiyet için eklendi
 app = Flask(__name__)
 
 # === Ortam Değişkenlerinden Ayarları Yükle ===
-# Bu değişkenleri Render.com üzerinde Environment Variables olarak tanımlamalısın.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -17,16 +16,10 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 
-# Testnet modunu ortam değişkeninden al. Canlı için 'False' olmalı.
-# Render'da 'BYBIT_TESTNET_MODE' diye bir değişken eklemezsen varsayılan olarak False olur.
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
 # === Yardımcı Fonksiyon: Telegram'a Mesaj Gönderme ===
 def send_telegram_message(message_text):
-    """
-    Belirtilen metni Telegram sohbetine HTML formatında gönderir.
-    Ortam değişkenlerinde TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID'nin tanımlı olması gerekir.
-    """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil.")
         return
@@ -38,26 +31,19 @@ def send_telegram_message(message_text):
     }
     try:
         response = requests.post(TELEGRAM_URL, json=payload)
-        response.raise_for_status() # HTTP hatalarını yakala (örn. 404, 500)
-        print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") # Mesajın ilk 100 karakteri
+        response.raise_for_status() 
+        print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") 
     except requests.exceptions.RequestException as e:
         print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}")
 
 # === Yardımcı Fonksiyon: Fiyat ve Miktarı Hassasiyete Yuvarlama ===
 def round_to_precision(value, precision_step):
-    """
-    Değeri belirtilen hassasiyet adımına göre yuvarlar.
-    Örn: value=0.12345, precision_step=0.001 -> 0.123
-    """
     if value is None:
         return None
-    if precision_step <= 0: # Sıfır veya negatif hassasiyet adımı durumunda orijinal değeri döndür
-        return float(value) # Orijinal değeri float olarak döndür
+    if precision_step <= 0: 
+        return float(value) 
 
-    # Decimal kütüphanesi ile hassas yuvarlama
-    # Adım formatı için 'quantize' fonksiyonuna uygun bir Decimal nesnesi oluştur
     precision_decimal = decimal.Decimal(str(precision_step))
-    # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_FLOOR: aşağı yuvarla)
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_FLOOR)
     return float(rounded_value)
 
@@ -75,14 +61,15 @@ def webhook():
         send_telegram_message(signal_message_for_telegram)
         
         # Gerekli sinyal verilerini al
+        # NOT: Artık TradingView'den direkt olarak beklediğimiz JSON formatı gelmeli.
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
         sl = data.get("sl") # Stop Loss
         tp = data.get("tp") # Take Profit
 
-        # Bybit'in side parametresi için düzeltme: TradingView 'buy'/'sell' gönderirken Bybit 'Buy'/'Sell' bekler
-        # Pine Script'te strategy.long/short kullanıldığı için 'long'/'short' da gelebilir.
+        # Bybit'in side parametresi için düzeltme: TradingView 'buy'/'sell' veya 'long'/'short' gönderirken Bybit 'Buy'/'Sell' bekler
+        side_for_bybit = ""
         if side and side.lower() == "buy":
             side_for_bybit = "Buy"
         elif side and side.lower() == "sell":
@@ -98,20 +85,17 @@ def webhook():
             return jsonify({"status": "error", "message": error_msg}), 400
 
         # TradingView'den gelen sembolde Bybit'in beklemediği prefix veya suffix varsa temizle
-        if symbol: # symbol'ün boş olup olmadığını kontrol et
-            # Örnek: "BINANCE:BTCUSDT" -> "BTCUSDT"
+        if symbol: 
             if ":" in symbol:
                 symbol = symbol.split(":")[-1]
                 print(f"Sembol TradingView prefix'inden temizlendi: {symbol}")
                 send_telegram_message(f"ℹ️ Sembol prefix temizlendi: <b>{symbol}</b>")
             
-            # Örnek: "BTCUSDT.P" -> "BTCUSDT" (Bybit için .P ekini kaldır)
-            if symbol.endswith(".P"): # Eğer sembol .P ile bitiyorsa
-                symbol = symbol[:-2] # Son 2 karakteri (.P) kaldır
+            if symbol.endswith(".P"):
+                symbol = symbol[:-2] 
                 print(f"Sembol '.P' ekinden temizlendi: {symbol}")
                 send_telegram_message(f"ℹ️ Sembol '.P' eki temizlendi: <b>{symbol}</b>")
             
-            # Ek bir güvenlik adımı: Sembolü büyük harflere çevir (Bybit sembolleri genelde büyük harftir)
             symbol = symbol.upper()
             send_telegram_message(f"ℹ️ Nihai işlem sembolü: <b>{symbol}</b>")
         else:
@@ -155,26 +139,23 @@ def webhook():
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
         # Sembol bilgilerini Bybit'ten al (Fiyat ve Miktar hassasiyeti için)
-        tick_size = 0.000001 # Varsayılan: çok küçük bir değer, çoğu parite için yeterli
-        lot_size = 0.000001  # Varsayılan: çok küçük bir değer
-        min_order_qty = 0.0  # Varsayılan: minimum emir miktarı
+        tick_size = 0.000001 # Default: a very small value, usually sufficient for most pairs
+        lot_size = 0.000001  # Default: a very small value
+        min_order_qty = 0.0  # Default: minimum order quantity
         
         try:
             exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
             if exchange_info_response and exchange_info_response['retCode'] == 0 and exchange_info_response['result']['list']:
-                # Bybit Unified Trading API'sinde filtreler 'list' içindeki ilk öğede yer alır
                 instrument_info = exchange_info_response['result']['list'][0]
                 price_filter = instrument_info.get('priceFilter', {})
                 lot_filter = instrument_info.get('lotFilter', {})
 
-                # Fiyat adımı (tickSize)
                 if 'tickSize' in price_filter:
                     tick_size = float(price_filter['tickSize'])
                 
-                # Miktar adımı (qtyStep) ve Minimum emir miktarı (minOrderQty)
                 if 'qtyStep' in lot_filter:
                     lot_size = float(lot_filter['qtyStep'])
-                elif 'minTradingQty' in lot_filter: # Alternatif olarak minTradingQty'yi kullanabiliriz
+                elif 'minTradingQty' in lot_filter:
                     lot_size = float(lot_filter['minTradingQty'])
 
                 if 'minOrderQty' in lot_filter:
