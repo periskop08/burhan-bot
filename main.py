@@ -52,7 +52,7 @@ def round_to_precision(value, precision_step):
     if value is None:
         return None
     if precision_step <= 0: # Sıfır veya negatif hassasiyet adımı durumunda orijinal değeri döndür
-        return value
+        return float(value) # Orijinal değeri float olarak döndür
 
     # Decimal kütüphanesi ile hassas yuvarlama
     # Adım formatı için 'quantize' fonksiyonuna uygun bir Decimal nesnesi oluştur
@@ -70,22 +70,48 @@ def webhook():
 
     try:
         # TradingView'den gelen ham sinyali Telegram'a gönder
-        signal_message_for_telegram = f"<b>🔔 TradingView Sinyali Alındı:</b>\n<pre>{json.dumps(raw_data, indent=2)}</pre>"
+        # NOT: Eğer TradingView'deki Mesaj kutusuna "{ "message": "{{strategy.order.alert_message}}" }" yazdıysak,
+        # 'raw_data' { "message": "{\"symbol\":\"BTCUSDT\",...}" } şeklinde olacaktır.
+        # Bu durumda asıl JSON'ı 'message' alanından almamız gerekecek.
+
+        # Gelen verinin ham halini Telegram'a gönder
+        signal_message_for_telegram = f"<b>🔔 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(raw_data, indent=2)}</pre>"
         send_telegram_message(signal_message_for_telegram)
 
         data = raw_data
-        # Bazı durumlarda TradingView JSON'ı 'text' alanı içinde string olarak gönderebilir.
-        if isinstance(data.get("text"), str):
-            data = json.loads(data["text"])
+        # Eğer gelen veri bir 'message' anahtarı içeriyorsa, asıl sinyal o anahtarın içindedir.
+        if "message" in data and isinstance(data["message"], str):
+            try:
+                # 'message' alanındaki string'i JSON'a çevir
+                data = json.loads(data["message"])
+                print(f"✅ 'message' alanından parse edilmiş sinyal: {data}")
+                send_telegram_message(f"<b>✅ Mesaj Parse Edildi:</b>\n<pre>{json.dumps(data, indent=2)}</pre>")
+            except json.JSONDecodeError as jde:
+                error_msg = f"❗ 'message' alanındaki JSON parse edilemedi: {jde}. İçerik: {data['message'][:200]}..."
+                print(error_msg)
+                send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
+                return jsonify({"status": "error", "message": error_msg}), 400
+        elif isinstance(data.get("text"), str): # Eski senaryo için (eğer TradingView direkt JSON string gönderiyorsa)
+            try:
+                data = json.loads(data["text"])
+                print(f"✅ 'text' alanından parse edilmiş sinyal: {data}")
+                send_telegram_message(f"<b>✅ Metin Parse Edildi:</b>\n<pre>{json.dumps(data, indent=2)}</pre>")
+            except json.JSONDecodeError as jde:
+                error_msg = f"❗ 'text' alanındaki JSON parse edilemedi: {jde}. İçerik: {data['text'][:200]}..."
+                print(error_msg)
+                send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
+                return jsonify({"status": "error", "message": error_msg}), 400
+        # else: data zaten doğrudan beklenen JSON formatındadır
 
-         # Gerekli sinyal verilerini al
+
+        # Gerekli sinyal verilerini al
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
         sl = data.get("sl") # Stop Loss
         tp = data.get("tp") # Take Profit
 
-         # TradingView'den gelen sembolde Bybit'in beklemediği prefix veya suffix varsa temizle
+        # TradingView'den gelen sembolde Bybit'in beklemediği prefix veya suffix varsa temizle
         if symbol: # symbol'ün boş olup olmadığını kontrol et
             # Örnek: "BINANCE:BTCUSDT" -> "BTCUSDT"
             if ":" in symbol:
@@ -140,24 +166,31 @@ def webhook():
         # Sembol bilgilerini Bybit'ten al (Fiyat ve Miktar hassasiyeti için)
         tick_size = 0.000001 # Varsayılan: çok küçük bir değer, çoğu parite için yeterli
         lot_size = 0.000001  # Varsayılan: çok küçük bir değer
+        min_order_qty = 0.0  # Varsayılan: minimum emir miktarı
         
         try:
             exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
             if exchange_info_response and exchange_info_response['retCode'] == 0 and exchange_info_response['result']['list']:
-                price_filter = exchange_info_response['result']['list'][0].get('priceFilter', {})
-                lot_filter = exchange_info_response['result']['list'][0].get('lotFilter', {})
+                # Bybit Unified Trading API'sinde filtreler 'list' içindeki ilk öğede yer alır
+                instrument_info = exchange_info_response['result']['list'][0]
+                price_filter = instrument_info.get('priceFilter', {})
+                lot_filter = instrument_info.get('lotFilter', {})
 
                 # Fiyat adımı (tickSize)
                 if 'tickSize' in price_filter:
                     tick_size = float(price_filter['tickSize'])
-                # Miktar adımı (qtyStep)
-                if 'qtyStep' in lot_filter: # Unified API'de lotFilter altında qtyStep bulunabilir
+                
+                # Miktar adımı (qtyStep) ve Minimum emir miktarı (minOrderQty)
+                if 'qtyStep' in lot_filter:
                     lot_size = float(lot_filter['qtyStep'])
                 elif 'minTradingQty' in lot_filter: # Alternatif olarak minTradingQty'yi kullanabiliriz
                     lot_size = float(lot_filter['minTradingQty'])
 
-                print(f"Bybit {symbol} için API'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}")
-                send_telegram_message(f"ℹ️ {symbol} için Bybit hassasiyetleri alındı:\nFiyat Adımı: <code>{tick_size}</code>\nMiktar Adımı: <code>{lot_size}</code>")
+                if 'minOrderQty' in lot_filter:
+                    min_order_qty = float(lot_filter['minOrderQty'])
+
+                print(f"Bybit {symbol} için API'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}, Min Order Qty: {min_order_qty}")
+                send_telegram_message(f"ℹ️ {symbol} için Bybit hassasiyetleri alındı:\nFiyat Adımı: <code>{tick_size}</code>\nMiktar Adımı: <code>{lot_size}</code>\nMin Emir Miktarı: <code>{min_order_qty}</code>")
             else:
                 print(f"Uyarı: {symbol} için Bybit hassasiyet bilgisi bulunamadı. API yanıtı: {exchange_info_response}. Varsayılanlar kullanılıyor.")
                 send_telegram_message(f"⚠️ {symbol} için Bybit hassasiyet bilgisi alınamadı. Varsayılanlar kullanılıyor.")
@@ -181,11 +214,18 @@ def webhook():
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
+        
+        # Miktar minimum emir miktarından küçükse, minimum miktarı kullan
+        if min_order_qty > 0 and quantity < min_order_qty:
+            warning_msg = f"⚠️ Hesaplanan miktar ({quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Minimum miktar kullanılıyor."
+            print(warning_msg)
+            send_telegram_message(warning_msg)
+            quantity = min_order_qty # Minimum miktarı kullan
 
 
         # Emir özetini Telegram'a gönder (yuvarlanmış değerlerle)
         trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ (Yuvarlanmış Değerler):</b>\n"
+            f"<b>📢 YENİ EMİR SİPARİŞİ (Yuvarlanmış ve Ayarlanmış Değerler):</b>\n"
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side.upper()}\n"
             f"<b>Miktar (Adet):</b> {quantity}\n"
