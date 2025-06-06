@@ -4,42 +4,29 @@ import requests
 from flask import Flask, request, jsonify
 from pybit.unified_trading import HTTP
 from config import api_key, api_secret
+import os
 
 app = Flask(__name__)
 
-# === Telegram Ayarları ===
-BOT_TOKEN = "7555166060:AAF57LlQMX_K4-RMnktR0jMEsTxcd1FK4jw"
-CHAT_ID = "-4915128956"
-TELEGRAM_URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-MAIN_WEBHOOK = "https://burhan-bot.onrender.com/webhook"
-
-@app.route("/send", methods=["POST"])
-def send():
+def send_telegram_message(message_text):
+    """Telegram'a mesaj gönderir."""
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message_text,
+        "parse_mode": "HTML" # HTML formatında mesaj göndermek için
+    }
     try:
-        raw_data = request.get_json()
-        print("📨 TradingView verisi geldi:", raw_data)
-
-        telegram_payload = {
-            "chat_id": CHAT_ID,
-            "text": json.dumps(raw_data),
-            "parse_mode": "HTML"
-        }
-
-        telegram_response = requests.post(TELEGRAM_URL, json=telegram_payload)
-        print("📤 Telegram'a mesaj gönderildi:", telegram_response.text)
-
-        webhook_response = requests.post(MAIN_WEBHOOK, json=raw_data)
-        print("📡 Webhook'a veri gönderildi:", webhook_response.text)
-
-        return jsonify({
-            "status": "ok",
-            "telegram_status": telegram_response.status_code,
-            "webhook_status": webhook_response.status_code
-        })
-
+        requests.post(TELEGRAM_URL, json=payload)
     except Exception as e:
-        print("🔥 Hata send():", e)
-        return jsonify({"status": "error", "message": str(e)}), 500
+        print(f"Telegram'a mesaj gönderirken hata oluştu: {e}")
+
+
+# === Telegram Ayarları ===
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN") # <<< BU SATIRI EKLE
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")   # <<< BU SATIRI EKLE
+TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage" # <<< BU SATIRI GÜNCELLE
+# MAIN_WEBHOOK = "https://burhan-bot.onrender.com/webhook" # <<< BU SATIRI SİL
+
 
 @app.route("/webhook", methods=["POST"])
 def webhook():
@@ -47,6 +34,10 @@ def webhook():
     print("📩 Webhook verisi alındı:", raw_data)
 
     try:
+        # Telegram'a sinyal bilgisi gönderme
+        signal_message = f"TradingView Sinyali Alındı:\n<pre>{json.dumps(raw_data, indent=2)}</pre>"
+        send_telegram_message(signal_message) # <<< Burayı değiştirdik
+
         data = raw_data
         if isinstance(data.get("text"), str):
             data = json.loads(data["text"])
@@ -58,8 +49,10 @@ def webhook():
         tp = data.get("tp")
 
         if not all([symbol, side, entry, sl, tp]):
-            print("❗ Eksik veri:", symbol, side, entry, sl, tp)
-            return jsonify({"status": "error", "message": "Eksik veri"}), 400
+            error_msg = f"❗ Eksik veri: Symbol:{symbol}, Side:{side}, Entry:{entry}, SL:{sl}, TP:{tp}"
+            print(error_msg)
+            send_telegram_message(f"🚨 Bot Hatası: {error_msg}") # <<< Hata durumunda da Telegram'a gönder
+            return jsonify({"status": "error", "message": error_msg}), 400
 
         entry = float(entry)
         sl = float(sl)
@@ -68,26 +61,36 @@ def webhook():
         risk_per_unit = abs(entry - sl)
         quantity = round(risk_dolar / risk_per_unit, 3)
 
-        print(f"📢 EMİR: {side.upper()} | Symbol: {symbol} | Miktar: {quantity}")
+        trade_summary = f"📢 EMİR:\nSide: {side.upper()}\nSymbol: {symbol}\nMiktar: {quantity}\nGiriş: {entry}\nSL: {sl}\nTP: {tp}"
+        print(trade_summary)
+        send_telegram_message(trade_summary) # <<< İşlem özetini de Telegram'a gönder
 
-        session = HTTP(api_key=api_key, api_secret=api_secret, testnet=False)
+       # ... Bybit API kısmı ...
+        BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
+        BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
+
+        session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=False)
 
         order = session.place_order(
-    category="linear",
-    symbol=symbol,
-    side="Buy" if side.lower() == "long" else "Sell",
-    order_type="Market",
-    qty=quantity,
-    time_in_force="GoodTillCancel"
-)
+            category="linear",
+            symbol=symbol,
+            side="Buy" if side.lower() == "long" else "Sell",
+            order_type="Market",
+            qty=quantity,
+            time_in_force="GoodTillCancel",
+            stopLoss=str(sl), # <<< Bu kısım ekleniyor
+            takeProfit=str(tp) # <<< Bu kısım ekleniyor
+        )
         print("✅ Emir gönderildi:", order)
+        send_telegram_message(f"✅ Bybit Emir Başarılı!\nEmir ID: {order.get('result', {}).get('orderId')}\nDurum: {order.get('retMsg')}") # <<< Başarılı emiri Telegram'a gönder
         return jsonify({"status": "ok", "order": order})
 
     except Exception as e:
-        print("🔥 HATA webhook:")
-        traceback.print_exc()
+        error_message = f"🔥 HATA webhook: {str(e)}\n{traceback.format_exc()}"
+        print(error_message)
+        send_telegram_message(f"🚨 Bot Hatası:\n<pre>{error_message}</pre>") # <<< Hata durumunda da Telegram'a detaylı gönder
         return jsonify({"status": "error", "message": str(e)}), 500
-
+    
 @app.route("/", methods=["GET"])
 def home():
     return "Burhan-Bot aktif 💪"
