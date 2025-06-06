@@ -78,18 +78,30 @@ def webhook():
         if isinstance(data.get("text"), str):
             data = json.loads(data["text"])
 
-        # Gerekli sinyal verilerini al
+         # Gerekli sinyal verilerini al
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
         sl = data.get("sl") # Stop Loss
         tp = data.get("tp") # Take Profit
 
-        # TradingView'den gelen sembolde Bybit'in beklemediği prefix varsa temizle (örn. "BINANCE:BTCUSDT" -> "BTCUSDT")
-        if symbol and ":" in symbol:
-            symbol = symbol.split(":")[-1]
-            print(f"Sembol TradingView prefix'inden temizlendi: {symbol}")
-            send_telegram_message(f"ℹ️ Sembol temizlendi: <b>{symbol}</b>")
+         # TradingView'den gelen sembolde Bybit'in beklemediği prefix veya suffix varsa temizle
+        if symbol: # symbol'ün boş olup olmadığını kontrol et
+            # Örnek: "BINANCE:BTCUSDT" -> "BTCUSDT"
+            if ":" in symbol:
+                symbol = symbol.split(":")[-1]
+                print(f"Sembol TradingView prefix'inden temizlendi: {symbol}")
+                send_telegram_message(f"ℹ️ Sembol prefix temizlendi: <b>{symbol}</b>")
+            
+            # Örnek: "BTCUSDT.P" -> "BTCUSDT" (Bybit için .P ekini kaldır)
+            if symbol.endswith(".P"): # Eğer sembol .P ile bitiyorsa
+                symbol = symbol[:-2] # Son 2 karakteri (.P) kaldır
+                print(f"Sembol '.P' ekinden temizlendi: {symbol}")
+                send_telegram_message(f"ℹ️ Sembol '.P' eki temizlendi: <b>{symbol}</b>")
+            
+            # Ek bir güvenlik adımı: Sembolü büyük harflere çevir (Bybit sembolleri genelde büyük harftir)
+            symbol = symbol.upper()
+            send_telegram_message(f"ℹ️ Nihai işlem sembolü: <b>{symbol}</b>")
 
         # Verilerin eksik olup olmadığını kontrol et
         if not all([symbol, side, entry, sl, tp]):
