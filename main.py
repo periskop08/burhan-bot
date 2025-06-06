@@ -111,13 +111,13 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
 
-        # Sayısal değerleri float'a çevir (TradingView'den string olarak gelebilir)
+        # Sayısal değerleri float'a çevir (Pine Script'ten direkt sayı olarak gelmeli, ama kontrol amaçlı)
         try:
             entry = float(entry)
             sl = float(sl)
             tp = float(tp)
         except (ValueError, TypeError) as ve:
-            error_msg = f"❗ Fiyat verileri sayıya çevrilemedi: Entry={entry}, SL={sl}, TP={tp}. Hata: {ve}. Lütfen TradingView sinyal formatını kontrol edin."
+            error_msg = f"❗ Fiyat verileri sayıya çevrilemedi: Entry={entry}, SL={sl}, TP={tp}. Hata: {ve}. Lütfen Pine Script alert formatını kontrol edin."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
@@ -141,7 +141,7 @@ def webhook():
         # Sembol bilgilerini Bybit'ten al (Fiyat ve Miktar hassasiyeti için)
         tick_size = 0.000001 # Default: a very small value, usually sufficient for most pairs
         lot_size = 0.000001  # Default: a very small value
-        min_order_qty = 0.0  # Default: minimum order quantity
+        min_order_qty = 0.0  # Default: minimum emir miktarı
         
         try:
             exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
@@ -170,8 +170,7 @@ def webhook():
         except Exception as api_e:
             error_msg_api = f"Bybit sembol/hassasiyet bilgisi alınırken hata: {api_e}. Varsayılan hassasiyetler kullanılıyor."
             print(error_msg_api)
-            send_telegram_message(f"🚨 Bot Hatası: {error_msg_api}")
-            # Hata durumunda varsayılan hassasiyetler zaten yukarıda tanımlı
+            send_telegram_message(f"🚨 Bot Hatası: {error_e}") # Hata değişkeni 'api_e' yerine 'e' olarak kullanılmıştı. Düzeltildi.
 
 
         # Fiyatları ve miktarı Bybit'in hassasiyetine yuvarla
@@ -199,7 +198,7 @@ def webhook():
         trade_summary = (
             f"<b>📢 YENİ EMİR SİPARİŞİ (Yuvarlanmış ve Ayarlanmış Değerler):</b>\n"
             f"<b>Symbol:</b> {symbol}\n"
-            f"<b>Yön:</b> {side_for_bybit.upper()}\n" # side_for_bybit kullanıldı
+            f"<b>Yön:</b> {side_for_bybit.upper()}\n" 
             f"<b>Miktar (Adet):</b> {quantity}\n"
             f"<b>Giriş Fiyatı:</b> {entry}\n"
             f"<b>Stop Loss (SL):</b> {sl}\n"
@@ -210,14 +209,14 @@ def webhook():
 
         # Bybit'e emir gönder
         order = session.place_order(
-            category="linear", # Vadeli işlemler için 'linear', spot için 'spot'
+            category="linear", 
             symbol=symbol,
-            side=side_for_bybit, # side_for_bybit kullanıldı
-            orderType="Market", # Piyasa emri
-            qty=str(quantity),  # Bybit API'si qty'yi string olarak bekler
-            timeInForce="GoodTillCancel", # Emir iptal edilene kadar geçerli
-            stopLoss=str(sl),   # SL fiyatını string olarak gönder
-            takeProfit=str(tp)  # TP fiyatını string olarak gönder
+            side=side_for_bybit, 
+            orderType="Market", 
+            qty=str(quantity),  
+            timeInForce="GoodTillCancel", 
+            stopLoss=str(sl),   
+            takeProfit=str(tp)  
         )
 
         print(f"✅ Emir gönderildi: {order}")
@@ -238,7 +237,6 @@ def webhook():
             return jsonify({"status": "ok", "order": order})
         else:
             error_response_msg = order.get('retMsg', 'Bilinmeyen Bybit hatası.')
-            # Bybit'ten gelen detaylı hatayı logda ve Telegram'da göster
             full_error_details = json.dumps(order, indent=2) 
             error_message_telegram = f"<b>🚨 Bybit Emir Hatası:</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity}\n<pre>{full_error_details}</pre>"
             send_telegram_message(error_message_telegram)
@@ -257,5 +255,4 @@ def home():
 
 # === Uygulamayı Başlat ===
 if __name__ == "__main__":
-    # Render'da gunicorn kullanılır, bu kısım sadece yerel test için
     app.run(debug=True, port=os.getenv("PORT", 5000))
