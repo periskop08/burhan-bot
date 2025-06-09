@@ -9,7 +9,6 @@ import decimal
 app = Flask(__name__)
 
 # === Ortam Değişkenlerinden Ayarları Yükle ===
-# Bu değişkenleri Render.com üzerinde Environment Variables olarak tanımlamalısın.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -17,17 +16,9 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 
-# Testnet modunu ortam değişkeninden al. Canlı (gerçek) hesap kullanıyorsan 'False' olmalı.
-# Render'da 'BYBIT_TESTNET_MODE' diye bir değişken tanımlamazsan varsayılan olarak False olur.
-# Gerçek hesap için bu değişkeni Render'da ya "False" olarak tanımla ya da hiç tanımlama.
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
-# === Yardımcı Fonksiyon: Telegram'a Mesaj Gönderme ===
 def send_telegram_message(message_text):
-    """
-    Belirtilen metni Telegram sohbetine HTML formatında gönderir.
-    Ortam değişkenlerinde TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID'nin tanımlı olması gerekir.
-    """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil.")
         return
@@ -39,59 +30,46 @@ def send_telegram_message(message_text):
     }
     try:
         response = requests.post(TELEGRAM_URL, json=payload)
-        response.raise_for_status() # HTTP hatalarını yakala (örn. 404, 500)
-        print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") # Mesajın ilk 100 karakteri
+        response.raise_for_status() 
+        print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") 
     except requests.exceptions.RequestException as e:
         print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}")
 
-# === Yardımcı Fonksiyon: Fiyat ve Miktarı Hassasiyete Yuvarlama ===
 def round_to_precision(value, precision_step):
-    """
-    Değeri belirtilen hassasiyet adımına göre yuvarlar.
-    Örn: value=0.12345, precision_step=0.001 -> 0.123
-    """
     if value is None:
         return None
-    if precision_step <= 0: # Sıfır veya negatif hassasiyet adımı durumunda orijinal değeri döndür
-        return float(value) # Orijinal değeri float olarak döndür
+    if precision_step <= 0: 
+        return float(value) 
 
-    # Decimal kütüphanesi ile hassas yuvarlama
-    # Adım formatı için 'quantize' fonksiyonuna uygun bir Decimal nesnesi oluştur
     precision_decimal = decimal.Decimal(str(precision_step))
-    # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_FLOOR: aşağı yuvarla)
-    rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_FLOOR)
+    # ROUND_HALF_UP yuvarlama modunu kullanmak daha güvenli olabilir
+    rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
 
 
-# === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # TradingView'den gelen JSON verisini doğrudan alıyoruz
     data = request.get_json()
     print(f"📩 Webhook verisi alındı: {data}")
 
     try:
-        # Gelen verinin ham halini Telegram'a gönder
         signal_message_for_telegram = f"<b>🔔 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(data, indent=2)}</pre>"
         send_telegram_message(signal_message_for_telegram)
         
-        # Gerekli sinyal verilerini al
-        # NOT: Artık TradingView'den direkt olarak beklediğimiz JSON formatı gelmeli.
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
-        sl = data.get("sl") # Stop Loss
-        tp = data.get("tp") # Take Profit
+        sl = data.get("sl") 
+        tp = data.get("tp") 
 
-        # Bybit'in side parametresi için düzeltme: TradingView 'buy'/'sell' veya 'long'/'short' gönderirken Bybit 'Buy'/'Sell' bekler
         side_for_bybit = ""
         if side and side.lower() == "buy":
             side_for_bybit = "Buy"
         elif side and side.lower() == "sell":
             side_for_bybit = "Sell"
-        elif side and side.lower() == "long": # Pine Script'teki 'long' için
+        elif side and side.lower() == "long": 
             side_for_bybit = "Buy"
-        elif side and side.lower() == "short": # Pine Script'teki 'short' için
+        elif side and side.lower() == "short": 
             side_for_bybit = "Sell"
         else:
             error_msg = f"❗ Geçersiz işlem yönü (side): {side}. 'Buy' veya 'Sell' bekleniyor."
@@ -135,22 +113,17 @@ def webhook():
             return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
 
         # === RİSK YÖNETİMİ AYARI BURADA ===
-        # Her işlemde risk edilecek dolar miktarı (birincil hedef).
         risk_dolar = 5.0 
-        
-        # İstediğimiz pozisyon büyüklüğü (dolar cinsinden). Bybit kaldıraç 10x ise, 200$ hedef pozisyon büyüklüğü.
-        # Bu, kaldıraç uygulanmış pozisyonun toplam değeridir.
         target_position_value_usd = 200.0 
 
-        # Risk per unit sıfıra çok yakınsa, sıfır kabul et ve hata ver
-        if abs(entry - sl) < 0.00000001: 
-            error_msg = f"❗ Giriş fiyatı ve SL arasındaki fark ({abs(entry - sl)}) çok küçük. Miktar hesaplanamaz veya çok büyük çıkabilir."
+        # SL ve Entry aynı ise işlem yapma (risk anlamsız olur)
+        if abs(entry - sl) < 0.00000001: # Çok küçük bir eşik değeri (örn. 0.00000001)
+            error_msg = f"❗ Giriş fiyatı ({entry}) ve SL fiyatı ({sl}) çok yakın veya aynı. Risk anlamsız olduğu için emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Pozisyon büyüklüğünü (adet olarak) hedef pozisyon değeri ve giriş fiyatına göre hesapla.
-        # Bu miktar, kaldıraç uygulanmış toplam pozisyonun notional değerini temsil eder.
+        # Hedef pozisyon büyüklüğüne göre adet hesapla
         calculated_quantity = target_position_value_usd / entry 
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
@@ -173,7 +146,7 @@ def webhook():
                 
                 if 'qtyStep' in lot_filter:
                     lot_size = float(lot_filter['qtyStep'])
-                elif 'minTradingQty' in lot_filter:
+                elif 'minTradingQty' in lot_filter: # Alternatif olarak minTradingQty'yi kullanabiliriz
                     lot_size = float(lot_filter['minTradingQty'])
 
                 if 'minOrderQty' in lot_filter:
@@ -196,12 +169,15 @@ def webhook():
             print(error_msg_api)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg_api}")
 
-
         entry = round_to_precision(entry, tick_size)
         sl = round_to_precision(sl, tick_size)
         tp = round_to_precision(tp, tick_size)
         
-        # calculated_quantity'nin Bybit limitleri içinde olduğundan emin ol
+        # calculate the quantity based on the actual entry price
+        # This makes sure the final quantity is based on the rounded entry price
+        calculated_quantity = target_position_value_usd / entry 
+
+        # Bybit'in limitlerini karşılamak için miktar ayarlamaları
         if calculated_quantity < min_order_qty:
             error_msg = f"❗ Hesaplanan miktar ({calculated_quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
             print(error_msg)
@@ -217,7 +193,7 @@ def webhook():
         # Nihai miktar, lot_size'a göre yuvarlanmış hali
         quantity = round_to_precision(calculated_quantity, lot_size)
         
-        if quantity <= 0: # Son yuvarlamadan sonra hala 0 veya negatif olabilir
+        if quantity <= 0: 
             error_msg = f"❗ Nihai hesaplanan miktar sıfır veya negatif ({quantity}). Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
@@ -230,16 +206,20 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-
+        # Hesaplanan fiili riski de Telegram'a gönder
+        actual_risk_if_sl_hit = abs(quantity * (entry - sl))
+        if actual_risk_if_sl_hit > risk_dolar:
+            send_telegram_message(f"⚠️ DİKKAT: Hesaplanan fiili risk (${actual_risk_if_sl_hit:.2f}) hedef risk (${risk_dolar:.2f}) üzerindedir. Bu, {target_position_value_usd}$ hedef pozisyon büyüklüğünden kaynaklanmaktadır.")
+        
         trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ (Hedef Değer: ${target_position_value_usd:.2f}):</b>\n" # Başlık güncellendi
+            f"<b>📢 YENİ EMİR SİPARİŞİ (Hedef Değer: ${target_position_value_usd:.2f}):</b>\n" 
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side_for_bybit.upper()}\n" 
             f"<b>Miktar (Adet):</b> {quantity}\n"
             f"<b>Giriş Fiyatı:</b> {entry}\n"
             f"<b>Stop Loss (SL):</b> {sl}\n"
             f"<b>Take Profit (TP):</b> {tp}\n"
-            f"<b>Hesaplanan Risk (SL vurulursa):</b> ${abs(quantity * (entry - sl)):.2f}" # Fiili risk
+            f"<b>Hesaplanan Risk (SL vurulursa):</b> ${actual_risk_if_sl_hit:.2f}" 
         )
         send_telegram_message(trade_summary)
 
