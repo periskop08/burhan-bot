@@ -295,13 +295,15 @@ def webhook():
         )
         send_telegram_message_to_queue(trade_summary)
         send_telegram_message_to_queue(f"DEBUG: Bybit'e gönderilen son miktar (string): {quantity_str_for_bybit}")
-
+        
+        sabitMiktar = 400
+        miktar = round(float(sabitMiktar)/ float(entry),0)
         order = session.place_order(
             category="linear", 
             symbol=symbol,
             side=side_for_bybit, 
             orderType="Market", 
-            qty=quantity_str_for_bybit,  # Bybit'e string hali gönderildi
+            qty=str(miktar),  # Bybit'e string hali gönderildi
             timeInForce="GoodTillCancel", 
             stopLoss=str(sl_rounded),   
             takeProfit=str(tp_rounded)  
