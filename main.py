@@ -52,26 +52,42 @@ def round_to_precision_str(value, precision_step):
     if value is None:
         return ""
     if precision_step <= 0:
-        return str(float(value))
+        return str(int(value)) if value == int(value) else str(float(value))
 
-    s = str(precision_step)
-    if 'e' in s: 
-        num_decimals_from_step = abs(int(s.split('e')[-1]))
-    elif '.' in s: 
-        num_decimals_from_step = len(s.split('.')[1])
-    else: 
-        num_decimals_from_step = 0
+    s_precision_step = str(precision_step)
     
-    # Bybit'in nadiren kabul ettiği çok yüksek hassasiyetleri önlemek için
-    # maksimum ondalık basamak sayısını manuel olarak sınırla.
-    # Genellikle 6-8 ondalık basamak yeterlidir.
-    safe_num_decimals = min(num_decimals_from_step, 8) # Buradaki 8 değeri değiştirilebilir, 6'dan 8'e çıkarıldı
+    num_decimals_from_step = 0
+    if 'e' in s_precision_step: 
+        parts = s_precision_step.split('e')
+        if '.' in parts[0]:
+            num_decimals_from_step = len(parts[0].split('.')[1])
+        num_decimals_from_step -= int(parts[1])
+    elif '.' in s_precision_step: 
+        num_decimals_from_step = len(s_precision_step.split('.')[1])
+    
+    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını sınırla ===
+    # Eğer lot_size çok küçükse, biz kendi güvenli ondalık basamak sayımızı dayatıyoruz.
+    # Örneğin, 4 ondalık basamak genellikle birçok kripto için yeterlidir.
+    # Eğer hala hata alırsak, bu değeri daha da düşürebiliriz (örn. 2).
+    # Eğer parite 1$'dan büyükse daha az, 1$'dan küçükse daha fazla ondalık basamak gerekebilir.
+    # Şimdilik 4 ondalık basamağı varsayılan olarak deneyelim.
+    # Eğer ham miktar 1'den büyükse 2 ondalık, değilse 6 ondalık deneyebiliriz (adaptive approach)
+    if value >= 1.0: # Miktar 1 adetten büyükse daha az ondalık basamak
+        safe_num_decimals = min(num_decimals_from_step, 2) 
+    else: # Miktar 1 adetten küçükse veya çok düşük fiyatlı parite ise daha fazla ondalık basamak
+        safe_num_decimals = min(num_decimals_from_step, 6) # Önceki 8'den 6'ya düşürüldü
+
+    # Eğer lot_size 1.0 ise (yani tam sayı bekleniyorsa), ondalık basamak sıfır olmalı
+    if precision_step == 1.0:
+        safe_num_decimals = 0
 
     d_value = decimal.Decimal(str(value))
     
+    # İstenen ondalık basamak sayısına göre yuvarlama
     format_template = "0." + "0" * safe_num_decimals
     rounded_d_value = d_value.quantize(decimal.Decimal(format_template), rounding=decimal.ROUND_HALF_UP)
     
+    # Sondaki gereksiz sıfırları normalleştirip stringe dönüştür
     return f"{rounded_d_value.normalize():f}"
 
 
@@ -123,7 +139,7 @@ def webhook():
             error_msg = "❗ Sembol bilgisi eksik!"
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
+            return jsonify({"status": "error", "message": error_msg}), 400
 
         if not all([symbol, side, entry, sl, tp]):
             error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
