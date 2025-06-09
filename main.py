@@ -94,7 +94,7 @@ def webhook():
             error_msg = "❗ Sembol bilgisi eksik!"
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
+            return jsonify({"status": "error", "message": error_msg}), 400
 
         if not all([symbol, side, entry, sl, tp]):
             error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
@@ -114,7 +114,7 @@ def webhook():
 
         # === RİSK YÖNETİMİ AYARI BURADA ===
         risk_dolar = 5.0 
-        target_position_value_usd = 500.0  # << Güncellendi: Hedef pozisyon değeri 500$
+        target_position_value_usd = 500.0  # Hedef pozisyon değeri 500$
 
         # Giriş fiyatı ve SL aynı veya çok yakınsa emir gönderme
         if abs(entry - sl) < 0.0000000001: 
@@ -123,6 +123,7 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
+        # Hedef pozisyon büyüklüğüne göre adet hesapla (geçici olarak)
         calculated_quantity_initial = target_position_value_usd / entry 
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
@@ -172,8 +173,20 @@ def webhook():
         sl = round_to_precision(sl, tick_size)
         tp = round_to_precision(tp, tick_size)
         
+        # Quantity'yi Bybit'in istediği tam hassasiyette ve lot_size katı olarak yuvarlamak için
+        # calculated_quantity_initial'ı doğrudan lot_size'a yuvarla
+        # Eğer lot_size çok küçükse, bu yine de çok fazla ondalık basamak bırakabilir.
+        # Bu yüzden, quantity'yi Bybit'e göndermeden önce string'e çevirip kontrol etmek daha iyi.
         quantity = round_to_precision(calculated_quantity_initial, lot_size)
         
+        # Eğer Bybit'in miktar adımı çok küçükse ve yine de hata veriyorsa,
+        # daha basit bir ondalık hassasiyete yuvarlamayı deneyebiliriz.
+        # Örneğin, 4 veya 6 ondalık basamağa yuvarlama.
+        # Bu, eğer Bybit'in API'si gerçekte 1e-06'dan daha kısıtlı bir ondalık hassasiyet bekliyorsa işe yarar.
+        # Test etmek için bu satırı etkinleştirebilirsin:
+        # quantity = round_to_precision(quantity, 0.0001) # 4 ondalık basamağa yuvarla
+
+
         # Yuvarlandıktan sonra limit kontrollerini tekrar yap
         if quantity < min_order_qty:
             error_msg = f"❗ Nihai miktar ({quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
@@ -216,12 +229,20 @@ def webhook():
         )
         send_telegram_message(trade_summary)
 
+        # Bybit'e göndereceğimiz miktar. String'e çevirmeden önce kontrol edelim.
+        # Ek bir kontrol: quantity'nin virgülden sonra kaç basamak olduğunu ve Bybit'in bunu destekleyip desteklemediğini kontrol etmek zor.
+        # Ancak, manuel işlemde çalışıyorsa, buradaki yuvarlama/tip dönüşümü sorunu olabilir.
+        # pybit kütüphanesinin kendisi str() bekliyor.
+        final_qty_to_send = str(quantity)
+        send_telegram_message(f"DEBUG: Bybit'e giden miktar: {final_qty_to_send}, lot_size: {lot_size}, min_qty: {min_order_qty}, max_qty: {max_order_qty}")
+
+
         order = session.place_order(
             category="linear", 
             symbol=symbol,
             side=side_for_bybit, 
             orderType="Market", 
-            qty=str(quantity),  
+            qty=final_qty_to_send, # Buraya string hali gitti
             timeInForce="GoodTillCancel", 
             stopLoss=str(sl),   
             takeProfit=str(tp)  
