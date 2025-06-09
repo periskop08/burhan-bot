@@ -9,6 +9,7 @@ import decimal # Finansal hesaplamalarda hassasiyet için eklendi
 app = Flask(__name__)
 
 # === Ortam Değişkenlerinden Ayarları Yükle ===
+# Bu değişkenleri Render.com üzerinde Environment Variables olarak tanımlamalısın.
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -16,10 +17,17 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 
+# Testnet modunu ortam değişkeninden al. Canlı (gerçek) hesap kullanıyorsan 'False' olmalı.
+# Render'da 'BYBIT_TESTNET_MODE' diye bir değişken tanımlamazsan varsayılan olarak False olur.
+# Gerçek hesap için bu değişkeni Render'da ya "False" olarak tanımla ya da hiç tanımlama.
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
 # === Yardımcı Fonksiyon: Telegram'a Mesaj Gönderme ===
 def send_telegram_message(message_text):
+    """
+    Belirtilen metni Telegram sohbetine HTML formatında gönderir.
+    Ortam değişkenlerinde TELEGRAM_BOT_TOKEN ve TELEGRAM_CHAT_ID'nin tanımlı olması gerekir.
+    """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil.")
         return
@@ -31,19 +39,26 @@ def send_telegram_message(message_text):
     }
     try:
         response = requests.post(TELEGRAM_URL, json=payload)
-        response.raise_for_status() 
-        print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") 
+        response.raise_for_status() # HTTP hatalarını yakala (örn. 404, 500)
+        print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") # Mesajın ilk 100 karakteri
     except requests.exceptions.RequestException as e:
         print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}")
 
 # === Yardımcı Fonksiyon: Fiyat ve Miktarı Hassasiyete Yuvarlama ===
 def round_to_precision(value, precision_step):
+    """
+    Değeri belirtilen hassasiyet adımına göre yuvarlar.
+    Örn: value=0.12345, precision_step=0.001 -> 0.123
+    """
     if value is None:
         return None
-    if precision_step <= 0: 
-        return float(value) 
+    if precision_step <= 0: # Sıfır veya negatif hassasiyet adımı durumunda orijinal değeri döndür
+        return float(value) # Orijinal değeri float olarak döndür
 
+    # Decimal kütüphanesi ile hassas yuvarlama
+    # Adım formatı için 'quantize' fonksiyonuna uygun bir Decimal nesnesi oluştur
     precision_decimal = decimal.Decimal(str(precision_step))
+    # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_FLOOR: aşağı yuvarla)
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_FLOOR)
     return float(rounded_value)
 
@@ -122,8 +137,11 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
 
-        # Risk yönetimi ile pozisyon büyüklüğü hesapla
-        risk_dolar = 16.0
+        # === RİSK YÖNETİMİ AYARI BURADA ===
+        # Her işlemde risk edilecek dolar miktarı. Kullanıcının belirttiği gibi 5$ olarak ayarlandı.
+        risk_dolar = 5.0 
+        
+        # Giriş fiyatı ile Stop Loss arasındaki dolar cinsinden risk (birim başına)
         risk_per_unit = abs(entry - sl)
 
         # Risk per unit sıfırsa (SL = Entry), hata ver veya varsayılan bir miktar kullan
@@ -136,12 +154,13 @@ def webhook():
         calculated_quantity = risk_dolar / risk_per_unit
 
         # Bybit API ile oturum başlat (Sembol bilgisi için burada başlatmak en doğrusu)
+        # Testnet durumu BYBIT_TESTNET_MODE değişkeninden okunuyor.
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
         # Sembol bilgilerini Bybit'ten al (Fiyat ve Miktar hassasiyeti için)
-        tick_size = 0.000001 # Default: a very small value, usually sufficient for most pairs
-        lot_size = 0.000001  # Default: a very small value
-        min_order_qty = 0.0  # Default: minimum emir miktarı
+        tick_size = 0.000001 # Varsayılan: çok küçük bir değer, çoğu parite için yeterli
+        lot_size = 0.000001  # Varsayılan: çok küçük bir değer
+        min_order_qty = 0.0  # Varsayılan: minimum emir miktarı
         
         try:
             exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
@@ -170,7 +189,7 @@ def webhook():
         except Exception as api_e:
             error_msg_api = f"Bybit sembol/hassasiyet bilgisi alınırken hata: {api_e}. Varsayılan hassasiyetler kullanılıyor."
             print(error_msg_api)
-            send_telegram_message(f"🚨 Bot Hatası: {error_e}") # Hata değişkeni 'api_e' yerine 'e' olarak kullanılmıştı. Düzeltildi.
+            send_telegram_message(f"🚨 Bot Hatası: {error_msg_api}")
 
 
         # Fiyatları ve miktarı Bybit'in hassasiyetine yuvarla
@@ -209,14 +228,14 @@ def webhook():
 
         # Bybit'e emir gönder
         order = session.place_order(
-            category="linear", 
+            category="linear", # Vadeli işlemler için 'linear', spot için 'spot'
             symbol=symbol,
             side=side_for_bybit, 
             orderType="Market", 
-            qty=str(quantity),  
+            qty=str(quantity),  # Bybit API'si qty'yi string olarak bekler
             timeInForce="GoodTillCancel", 
-            stopLoss=str(sl),   
-            takeProfit=str(tp)  
+            stopLoss=str(sl),   # SL fiyatını string olarak gönder
+            takeProfit=str(tp)  # TP fiyatını string olarak gönder
         )
 
         print(f"✅ Emir gönderildi: {order}")
