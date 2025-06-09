@@ -92,7 +92,7 @@ def webhook():
             error_msg = "❗ Sembol bilgisi eksik!"
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
+            return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
 
         if not all([symbol, side, entry, sl, tp]):
             error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
@@ -111,26 +111,41 @@ def webhook():
             return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
 
         # === RİSK YÖNETİMİ AYARI BURADA ===
-        risk_dolar = 5.0 # Her işlemde risk edilecek dolar miktarı
+        # Her işlemde risk edilecek dolar miktarı (birincil hedef).
+        risk_dolar = 5.0 
         
+        # İstediğimiz maksimum pozisyon büyüklüğü (dolar cinsinden) - bir üst limit.
+        target_max_position_value_usd = 20.0 
+
         # Risk per unit sıfıra çok yakınsa, sıfır kabul et ve hata ver
-        # Çok küçük farklar büyük miktarlara yol açabilir
-        if abs(entry - sl) < 0.00000001: # Çok küçük bir eşik değeri
+        if abs(entry - sl) < 0.00000001: 
             error_msg = f"❗ Giriş fiyatı ve SL arasındaki fark ({abs(entry - sl)}) çok küçük. Miktar hesaplanamaz veya çok büyük çıkabilir."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        risk_per_unit = abs(entry - sl)
-        calculated_quantity = risk_dolar / risk_per_unit
+        # ADIM 1: Risk başına miktar hesapla (birincil risk hedefi)
+        calculated_quantity_from_risk = risk_dolar / abs(entry - sl) 
+
+        # ADIM 2: Bu miktarın oluşturacağı pozisyon değerini hesapla
+        notional_value_from_risk = calculated_quantity_from_risk * entry
+
+        # ADIM 3: Eğer risk bazlı pozisyon değeri, maksimum hedefi aşarsa, miktarı hedefe göre ayarla
+        if notional_value_from_risk > target_max_position_value_usd:
+            # Miktarı, maksimum pozisyon değerini aşmayacak şekilde ayarla
+            calculated_quantity = target_max_position_value_usd / entry
+            send_telegram_message(f"ℹ️ Pozisyon değeri ({notional_value_from_risk:.2f} USDT) maksimum hedef ({target_max_position_value_usd} USDT) üzerinde olduğu için miktar ayarlandı. Yeni miktar: {calculated_quantity:.4f}")
+        else:
+            calculated_quantity = calculated_quantity_from_risk # Normal risk bazlı miktar
+
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
         tick_size = 0.000001 
         lot_size = 0.000001  
         min_order_qty = 0.0  
-        max_order_qty = float('inf') # Sonsuz olarak başlat, API'den alacağız
-        min_order_value = 0.0 # USDT bazında minimum emir değeri (genellikle $10)
+        max_order_qty = float('inf') 
+        min_order_value = 0.0 
         
         try:
             exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
@@ -150,10 +165,10 @@ def webhook():
                 if 'minOrderQty' in lot_filter:
                     min_order_qty = float(lot_filter['minOrderQty'])
                 
-                if 'maxOrderQty' in lot_filter: # << YENİ EKLENDİ: Maksimum emir miktarı
+                if 'maxOrderQty' in lot_filter: 
                     max_order_qty = float(lot_filter['maxOrderQty'])
 
-                if 'minOrderValue' in lot_filter: # << YENİ EKLENDİ: Minimum emir değeri (USDT cinsinden)
+                if 'minOrderValue' in lot_filter: 
                     min_order_value = float(lot_filter['minOrderValue'])
 
                 print(f"Bybit {symbol} için API'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}, Min Order Qty: {min_order_qty}, Max Order Qty: {max_order_qty}, Min Order Value: {min_order_value}")
@@ -173,29 +188,24 @@ def webhook():
         tp = round_to_precision(tp, tick_size)
         quantity = round_to_precision(calculated_quantity, lot_size)
         
-        # Miktar sıfır veya negatifse emir gönderme
         if quantity <= 0:
             error_msg = f"❗ Hesaplanan miktar sıfır veya negatif ({quantity}). Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
         
-        # Miktar minimum emir miktarından küçükse, minimum miktarı kullan
         if min_order_qty > 0 and quantity < min_order_qty:
             warning_msg = f"⚠️ Hesaplanan miktar ({quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Minimum miktar kullanılıyor."
             print(warning_msg)
             send_telegram_message(warning_msg)
             quantity = min_order_qty 
         
-        # Miktar maksimum emir miktarından büyükse, maksimum miktarı kullan veya hata ver
         if quantity > max_order_qty:
             error_msg = f"❗ Hesaplanan miktar ({quantity}) maksimum emir miktarı ({max_order_qty}) üstündedir. Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Minimum işlem değerini (USDT cinsinden) kontrol et
-        # Pozisyonun dolar değeri = miktar * giriş fiyatı
         order_value = quantity * entry
         if min_order_value > 0 and order_value < min_order_value:
             error_msg = f"❗ Hesaplanan pozisyon değeri ({order_value:.2f} USDT) minimum emir değeri ({min_order_value} USDT) altındadır. Emir gönderilmiyor."
@@ -205,14 +215,14 @@ def webhook():
 
 
         trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ (Yuvarlanmış ve Ayarlanmış Değerler):</b>\n"
+            f"<b>📢 YENİ EMİR SİPARİŞİ (Risk: ${risk_dolar}, Maks. Değer: ${target_max_position_value_usd}):</b>\n" # Başlık güncellendi
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side_for_bybit.upper()}\n" 
             f"<b>Miktar (Adet):</b> {quantity}\n"
             f"<b>Giriş Fiyatı:</b> {entry}\n"
             f"<b>Stop Loss (SL):</b> {sl}\n"
             f"<b>Take Profit (TP):</b> {tp}\n"
-            f"<b>Risk Miktarı:</b> ${risk_dolar}"
+            f"<b>Hesaplanan Risk (SL vurulursa):</b> ${abs(quantity * (entry - sl)):.2f}" # Fiili risk
         )
         send_telegram_message(trade_summary)
 
