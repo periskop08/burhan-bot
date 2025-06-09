@@ -18,6 +18,7 @@ BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
+# === Yardımcı Fonksiyon: Telegram'a Mesaj Gönderme ===
 def send_telegram_message(message_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil.")
@@ -35,6 +36,7 @@ def send_telegram_message(message_text):
     except requests.exceptions.RequestException as e:
         print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}")
 
+# === Yardımcı Fonksiyon: Fiyat ve Miktarı Hassasiyete Yuvarlama ===
 def round_to_precision(value, precision_step):
     if value is None:
         return None
@@ -47,6 +49,7 @@ def round_to_precision(value, precision_step):
     return float(rounded_value)
 
 
+# === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
@@ -94,7 +97,7 @@ def webhook():
             error_msg = "❗ Sembol bilgisi eksik!"
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
+            return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
 
         if not all([symbol, side, entry, sl, tp]):
             error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
@@ -123,8 +126,10 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Hedef pozisyon büyüklüğüne göre adet hesapla (geçici olarak)
+        # Hedef pozisyon büyüklüğüne göre adet hesapla
         calculated_quantity_initial = target_position_value_usd / entry 
+        send_telegram_message(f"DEBUG: Hedef Pozisyon Değeri ({target_position_value_usd}$), Giriş Fiyatı ({entry}). Ham hesaplanan miktar: {calculated_quantity_initial}")
+
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
@@ -173,20 +178,9 @@ def webhook():
         sl = round_to_precision(sl, tick_size)
         tp = round_to_precision(tp, tick_size)
         
-        # Quantity'yi Bybit'in istediği tam hassasiyette ve lot_size katı olarak yuvarlamak için
-        # calculated_quantity_initial'ı doğrudan lot_size'a yuvarla
-        # Eğer lot_size çok küçükse, bu yine de çok fazla ondalık basamak bırakabilir.
-        # Bu yüzden, quantity'yi Bybit'e göndermeden önce string'e çevirip kontrol etmek daha iyi.
+        # Nihai miktar, lot_size'a göre yuvarlanmış hali
         quantity = round_to_precision(calculated_quantity_initial, lot_size)
         
-        # Eğer Bybit'in miktar adımı çok küçükse ve yine de hata veriyorsa,
-        # daha basit bir ondalık hassasiyete yuvarlamayı deneyebiliriz.
-        # Örneğin, 4 veya 6 ondalık basamağa yuvarlama.
-        # Bu, eğer Bybit'in API'si gerçekte 1e-06'dan daha kısıtlı bir ondalık hassasiyet bekliyorsa işe yarar.
-        # Test etmek için bu satırı etkinleştirebilirsin:
-        # quantity = round_to_precision(quantity, 0.0001) # 4 ondalık basamağa yuvarla
-
-
         # Yuvarlandıktan sonra limit kontrollerini tekrar yap
         if quantity < min_order_qty:
             error_msg = f"❗ Nihai miktar ({quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
@@ -206,9 +200,14 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
+        # Gizli minimum işlem değerini kontrol etmek için
+        # Bybit API'si minOrderValue'yi 0.0 döndürse bile, birçok parite için minimum 10 USDT gibi bir değer beklenir.
+        # Bu değeri sabit olarak tanımlayabiliriz veya daha güvenli bir eşik kullanabiliriz.
+        implied_min_order_value = max(10.0, min_order_value) # Bybit'in bildirdiği minOrderValue'den veya 10 USDT'den büyük olanı al
+
         order_value = quantity * entry
-        if min_order_value > 0 and order_value < min_order_value:
-            error_msg = f"❗ Nihai pozisyon değeri ({order_value:.2f} USDT) minimum emir değeri ({min_order_value} USDT) altındadır. Emir gönderilmiyor."
+        if implied_min_order_value > 0 and order_value < implied_min_order_value:
+            error_msg = f"❗ Nihai pozisyon değeri ({order_value:.2f} USDT) belirlenen minimum emir değeri ({implied_min_order_value} USDT) altındadır. Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
@@ -229,20 +228,12 @@ def webhook():
         )
         send_telegram_message(trade_summary)
 
-        # Bybit'e göndereceğimiz miktar. String'e çevirmeden önce kontrol edelim.
-        # Ek bir kontrol: quantity'nin virgülden sonra kaç basamak olduğunu ve Bybit'in bunu destekleyip desteklemediğini kontrol etmek zor.
-        # Ancak, manuel işlemde çalışıyorsa, buradaki yuvarlama/tip dönüşümü sorunu olabilir.
-        # pybit kütüphanesinin kendisi str() bekliyor.
-        final_qty_to_send = str(quantity)
-        send_telegram_message(f"DEBUG: Bybit'e giden miktar: {final_qty_to_send}, lot_size: {lot_size}, min_qty: {min_order_qty}, max_qty: {max_order_qty}")
-
-
         order = session.place_order(
             category="linear", 
             symbol=symbol,
             side=side_for_bybit, 
             orderType="Market", 
-            qty=final_qty_to_send, # Buraya string hali gitti
+            qty=str(quantity),  
             timeInForce="GoodTillCancel", 
             stopLoss=str(sl),   
             takeProfit=str(tp)  
