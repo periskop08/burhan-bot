@@ -36,7 +36,7 @@ def send_telegram_message(message_text):
     except requests.exceptions.RequestException as e:
         print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}")
 
-# === Yardımcı Fonksiyon: Fiyat ve Miktarı Hassasiyete Yuvarlama ===
+# === Yardımcı Fonksiyon: Fiyatları hassasiyete yuvarlama (float döndürür) ===
 def round_to_precision(value, precision_step):
     if value is None:
         return None
@@ -44,9 +44,39 @@ def round_to_precision(value, precision_step):
         return float(value) 
 
     precision_decimal = decimal.Decimal(str(precision_step))
-    # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_HALF_UP standart ve güvenlidir)
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
+
+# === YENİ Yardımcı Fonksiyon: Miktarı hassasiyete yuvarlama ve string olarak döndürme ===
+# Bu fonksiyon Bybit'in beklediği ondalık hassasiyeti tam olarak yakalamayı hedefler.
+def round_to_precision_str(value, precision_step):
+    if value is None:
+        return ""
+    if precision_step <= 0:
+        return str(float(value))
+
+    # precision_step'ten ondalık basamak sayısını doğru bir şekilde alalım
+    s = str(precision_step)
+    if 'e' in s: # Bilimsel gösterim varsa (örn: '1e-06' -> 6 ondalık basamak)
+        num_decimals = abs(int(s.split('e')[-1]))
+    elif '.' in s: # Normal ondalık sayı (örn: '0.0001' -> 4 ondalık basamak)
+        num_decimals = len(s.split('.')[1])
+    else: # Tam sayı (örn: '1.0' veya '1')
+        num_decimals = 0
+    
+    # Decimal kütüphanesi ile yüksek hassasiyetle yuvarlama
+    # Daha sonra f-string ile istenen ondalık basamak sayısına formatla
+    d_value = decimal.Decimal(str(value))
+    d_precision_step = decimal.Decimal(str(precision_step))
+    
+    # Yuvarlama işlemini Decimal üzerinde yap
+    # Bu, floating point hatalarını minimize eder
+    rounded_d_value = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
+    
+    # F-string formatlaması ile doğrudan string'e dönüştür
+    # .trim_zeros() ile sondaki gereksiz sıfırları kaldırıyoruz (örn: 10.0000 -> 10)
+    # Bu, Bybit'in bazı API'lerde istediği daha temiz formatı sağlayabilir
+    return f"{rounded_d_value.normalize():f}"
 
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
@@ -116,28 +146,29 @@ def webhook():
             return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
 
         # === RİSK YÖNETİMİ AYARI BURADA ===
+        # Hedeflenen sabit dolar riski
         risk_dolar = 5.0 
-        target_position_value_usd = 500.0  # Hedef pozisyon değeri 500$
-
+        
         # Giriş fiyatı ve SL aynı veya çok yakınsa emir gönderme
+        # Bu durumda risk anlamsız olur ve borsalar reddeder.
         if abs(entry - sl) < 0.0000000001: 
             error_msg = f"❗ GİRİŞ FİYATI ({entry}) ve STOP LOSS FİYATI ({sl}) AYNI VEYA ÇOK YAKIN. Risk anlamsız olduğu için emir gönderilmiyor. Lütfen Pine Script stratejinizi kontrol edin."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Hedef pozisyon büyüklüğüne göre adet hesapla
-        calculated_quantity_initial = target_position_value_usd / entry 
-        send_telegram_message(f"DEBUG: Hedef Pozisyon Değeri ({target_position_value_usd}$), Giriş Fiyatı ({entry}). Ham hesaplanan miktar: {calculated_quantity_initial}")
+        # Pozisyon büyüklüğünü (adet olarak) doğrudan risk_dolar ve SL mesafesine göre hesapla
+        calculated_quantity_initial = risk_dolar / abs(entry - sl) 
+        send_telegram_message(f"DEBUG: Hedef Risk ({risk_dolar}$), Giriş Fiyatı ({entry}), SL ({sl}). Ham hesaplanan miktar: {calculated_quantity_initial}")
 
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
-        tick_size = 0.000001 
-        lot_size = 0.000001  
-        min_order_qty = 0.0  
-        max_order_qty = float('inf') 
-        min_order_value = 0.0 
+        tick_size = 0.000001 # Varsayılan: çok küçük bir değer
+        lot_size = 0.000001  # Varsayılan: çok küçük bir değer
+        min_order_qty = 0.0  # Varsayılan: minimum emir miktarı
+        max_order_qty = float('inf') # Sonsuz olarak başlat
+        min_order_value = 0.0 # USDT bazında minimum emir değeri
         
         try:
             exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
@@ -174,53 +205,56 @@ def webhook():
             print(error_msg_api)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg_api}")
 
+        # Fiyatları Bybit'in hassasiyetine yuvarla (float olarak kalırlar)
         entry = round_to_precision(entry, tick_size)
         sl = round_to_precision(sl, tick_size)
         tp = round_to_precision(tp, tick_size)
         
-        # Nihai miktar, lot_size'a göre yuvarlanmış hali
-        quantity = round_to_precision(calculated_quantity_initial, lot_size)
+        # Miktarı lot_size'a göre yuvarla ve string olarak al. 
+        # Bu string, Bybit'e doğrudan gönderilecek formattır.
+        quantity_str_for_bybit = round_to_precision_str(calculated_quantity_initial, lot_size)
         
-        # Yuvarlandıktan sonra limit kontrollerini tekrar yap
-        if quantity < min_order_qty:
-            error_msg = f"❗ Nihai miktar ({quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
+        # Limit kontrollerini yapmak için string'i tekrar float'a çeviriyoruz
+        quantity_float_for_checks = float(quantity_str_for_bybit)
+
+        # Yuvarlandıktan sonra limit kontrollerini tekrar yap (float haliyle)
+        if quantity_float_for_checks < min_order_qty:
+            error_msg = f"❗ Nihai miktar ({quantity_float_for_checks}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
         
-        if quantity > max_order_qty:
-            error_msg = f"❗ Nihai miktar ({quantity}) maksimum emir miktarı ({max_order_qty}) üstündedir. Emir gönderilmiyor."
+        if quantity_float_for_checks > max_order_qty:
+            error_msg = f"❗ Nihai miktar ({quantity_float_for_checks}) maksimum emir miktarı ({max_order_qty}) üstündedir. Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        if quantity <= 0: 
-            error_msg = f"❗ Nihai hesaplanan miktar sıfır veya negatif ({quantity}). Emir gönderilmiyor."
+        if quantity_float_for_checks <= 0: 
+            error_msg = f"❗ Nihai hesaplanan miktar sıfır veya negatif ({quantity_float_for_checks}). Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
         # Gizli minimum işlem değerini kontrol etmek için
-        # Bybit API'si minOrderValue'yi 0.0 döndürse bile, birçok parite için minimum 10 USDT gibi bir değer beklenir.
-        # Bu değeri sabit olarak tanımlayabiliriz veya daha güvenli bir eşik kullanabiliriz.
-        implied_min_order_value = max(10.0, min_order_value) # Bybit'in bildirdiği minOrderValue'den veya 10 USDT'den büyük olanı al
+        implied_min_order_value = max(10.0, min_order_value) 
 
-        order_value = quantity * entry
+        order_value = quantity_float_for_checks * entry
         if implied_min_order_value > 0 and order_value < implied_min_order_value:
             error_msg = f"❗ Nihai pozisyon değeri ({order_value:.2f} USDT) belirlenen minimum emir değeri ({implied_min_order_value} USDT) altındadır. Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        actual_risk_if_sl_hit = abs(quantity * (entry - sl))
+        actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry - sl))
         if actual_risk_if_sl_hit > risk_dolar:
-            send_telegram_message(f"⚠️ DİKKAT: Hesaplanan fiili risk (${actual_risk_if_sl_hit:.2f}) hedef risk (${risk_dolar:.2f}) üzerindedir. Bu, {target_position_value_usd}$ hedef pozisyon büyüklüğünden kaynaklanmaktadır.")
+            send_telegram_message(f"⚠️ DİKKAT: Hesaplanan fiili risk (${actual_risk_if_sl_hit:.2f}) hedef risk (${risk_dolar:.2f}) üzerindedir.")
         
         trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ (Hedef Değer: ${target_position_value_usd:.2f}):</b>\n" 
+            f"<b>📢 YENİ EMİR SİPARİŞİ (Risk: ${risk_dolar:.2f}):</b>\n" # Başlık güncellendi
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side_for_bybit.upper()}\n" 
-            f"<b>Miktar (Adet):</b> {quantity}\n"
+            f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n" # Debug için float hali
             f"<b>Giriş Fiyatı:</b> {entry}\n"
             f"<b>Stop Loss (SL):</b> {sl}\n"
             f"<b>Take Profit (TP):</b> {tp}\n"
@@ -233,7 +267,7 @@ def webhook():
             symbol=symbol,
             side=side_for_bybit, 
             orderType="Market", 
-            qty=str(quantity),  
+            qty=quantity_str_for_bybit,  # Bybit'e string hali gönderildi
             timeInForce="GoodTillCancel", 
             stopLoss=str(sl),   
             takeProfit=str(tp)  
@@ -257,7 +291,7 @@ def webhook():
         else:
             error_response_msg = order.get('retMsg', 'Bilinmeyen Bybit hatası.')
             full_error_details = json.dumps(order, indent=2) 
-            error_message_telegram = f"<b>🚨 Bybit Emir Hatası:</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity}\n<pre>{full_error_details}</pre>"
+            error_message_telegram = f"<b>🚨 Bybit Emir Hatası:</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity_float_for_checks}\n<pre>{full_error_details}</pre>"
             send_telegram_message(error_message_telegram)
             return jsonify({"status": "error", "message": error_response_msg}), 500
 
