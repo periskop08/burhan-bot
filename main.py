@@ -41,8 +41,22 @@ def round_to_precision(value, precision_step):
     if precision_step <= 0: 
         return float(value) 
 
-    precision_decimal = decimal.Decimal(str(precision_step))
-    # ROUND_HALF_UP yuvarlama modunu kullanmak daha güvenli olabilir
+    # precision_step'i ondalık basamak sayısına çevir
+    # Örneğin, 0.0001 için 4 ondalık basamak
+    s = str(precision_step)
+    if 'e' in s: # Bilimsel gösterim varsa
+        parts = s.split('e')
+        num_decimals = -int(parts[1]) if '.' not in parts[0] else len(parts[0].split('.')[1]) - int(parts[1])
+    elif '.' in s: # Normal ondalık sayı
+        num_decimals = len(s.split('.')[1])
+    else: # Tam sayı
+        num_decimals = 0
+    
+    # Yeni precision_decimal oluştur
+    precision_format = "0." + "0" * num_decimals
+    precision_decimal = decimal.Decimal(precision_format)
+
+    # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_HALF_UP daha standarttır)
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
 
@@ -123,8 +137,8 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Hedef pozisyon büyüklüğüne göre adet hesapla
-        calculated_quantity = target_position_value_usd / entry 
+        # Hedef pozisyon büyüklüğüne göre adet hesapla (geçici olarak)
+        calculated_quantity_initial = target_position_value_usd / entry 
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
@@ -146,7 +160,7 @@ def webhook():
                 
                 if 'qtyStep' in lot_filter:
                     lot_size = float(lot_filter['qtyStep'])
-                elif 'minTradingQty' in lot_filter: # Alternatif olarak minTradingQty'yi kullanabiliriz
+                elif 'minTradingQty' in lot_filter: 
                     lot_size = float(lot_filter['minTradingQty'])
 
                 if 'minOrderQty' in lot_filter:
@@ -173,26 +187,25 @@ def webhook():
         sl = round_to_precision(sl, tick_size)
         tp = round_to_precision(tp, tick_size)
         
-        # calculate the quantity based on the actual entry price
-        # This makes sure the final quantity is based on the rounded entry price
-        calculated_quantity = target_position_value_usd / entry 
-
-        # Bybit'in limitlerini karşılamak için miktar ayarlamaları
-        if calculated_quantity < min_order_qty:
-            error_msg = f"❗ Hesaplanan miktar ({calculated_quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
-            print(error_msg)
-            send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-        
-        if calculated_quantity > max_order_qty:
-            error_msg = f"❗ Hesaplanan miktar ({calculated_quantity}) maksimum emir miktarı ({max_order_qty}) üstündedir. Emir gönderilmiyor."
-            print(error_msg)
-            send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
         # Nihai miktar, lot_size'a göre yuvarlanmış hali
-        quantity = round_to_precision(calculated_quantity, lot_size)
+        # Bu, hedef pozisyon değerini (target_position_value_usd) en iyi şekilde yansıtacak şekilde
+        # Bybit'in miktar adımlarına (lot_size) göre ayarlanır.
+        # Önce ham miktarı hesapla, sonra lot_size'a yuvarla
+        quantity = round_to_precision(calculated_quantity_initial, lot_size)
         
+        # Yuvarlandıktan sonra limit kontrollerini tekrar yap
+        if quantity < min_order_qty:
+            error_msg = f"❗ Nihai miktar ({quantity}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
+            print(error_msg)
+            send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
+        
+        if quantity > max_order_qty:
+            error_msg = f"❗ Nihai miktar ({quantity}) maksimum emir miktarı ({max_order_qty}) üstündedir. Emir gönderilmiyor."
+            print(error_msg)
+            send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
+
         if quantity <= 0: 
             error_msg = f"❗ Nihai hesaplanan miktar sıfır veya negatif ({quantity}). Emir gönderilmiyor."
             print(error_msg)
