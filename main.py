@@ -7,7 +7,7 @@ import os
 import decimal
 import time
 import threading
-from queue import Queue # Mesaj kuyruğu için
+from queue import Queue 
 
 app = Flask(__name__)
 
@@ -24,7 +24,7 @@ BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true'
 # === Telegram Mesaj Kuyruğu ve İşleyici ===
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
-TELEGRAM_RATE_LIMIT_DELAY = 1.0 # Telegram'a en az 1 saniyede bir mesaj gönder (daha güvenli için 1-2 saniye)
+TELEGRAM_RATE_LIMIT_DELAY = 1.0 # Telegram'a en az 1 saniyede bir mesaj gönder
 
 def telegram_message_sender():
     """
@@ -47,22 +47,17 @@ def telegram_message_sender():
                     print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") 
                     LAST_TELEGRAM_MESSAGE_TIME = current_time
                 except requests.exceptions.RequestException as e:
-                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}. Mesaj tekrar kuyruğa eklendi.")
-                    # Hata durumunda mesajı tekrar kuyruğa ekleyebiliriz veya loglayabiliriz.
-                    # Basitlik için şimdilik sadece logluyoruz ve geçiyoruz.
-                    # telegram_message_queue.put(message_text) # Sonsuz döngüye yol açabilir, dikkatli kullanılmalı
+                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}. Mesaj KAYBEDİLDİ (tekrar kuyruğa eklenmiyor).")
                 finally:
-                    telegram_message_queue.task_done() # Mesajın işlendiğini bildir
+                    telegram_message_queue.task_done() 
             else:
-                time.sleep(TELEGRAM_RATE_LIMIT_DELAY - (current_time - LAST_TELEGRAM_MESSAGE_TIME)) # Gecikme süresini bekle
+                time.sleep(TELEGRAM_RATE_LIMIT_DELAY - (current_time - LAST_TELEGRAM_MESSAGE_TIME)) 
         else:
-            time.sleep(0.1) # Kuyruk boşsa kısa bir süre bekle
+            time.sleep(0.1) 
 
-# Telegram mesaj gönderme işleyiciyi başlat
 telegram_sender_thread = threading.Thread(target=telegram_message_sender, daemon=True)
 telegram_sender_thread.start()
 
-# send_telegram_message fonksiyonunu kuyruğu kullanacak şekilde güncelle
 def send_telegram_message_to_queue(message_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil.")
@@ -86,7 +81,7 @@ def round_to_precision_str(value, precision_step):
     if value is None:
         return ""
     if precision_step <= 0:
-        return str(int(value)) if value == int(value) else str(float(value))
+        return str(float(value))
 
     s_precision_step = str(precision_step)
     num_decimals_from_step = 0
@@ -95,18 +90,23 @@ def round_to_precision_str(value, precision_step):
         parts = s_precision_step.split('e')
         if '.' in parts[0]:
             num_decimals_from_step = len(parts[0].split('.')[1])
-        num_decimals_from_step -= int(parts[1]) 
-
+        num_decimals_from_step += abs(int(parts[1])) # Bilimsel notasyondaki üssü de dikkate al
+        
     elif '.' in s_precision_step: 
         num_decimals_from_step = len(s_precision_step.split('.')[1])
     
+    # Decimal kütüphanesi ile yüksek hassasiyetle yuvarlama
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(s_precision_step)
     
-    rounded_d_value = d_value.quantize(d_precision_step, rounding=decimal.ROUND_HALF_UP)
+    # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
+    # Yani 10.5'i 0.5 adımla yuvarlarsak 10.5 olur, 10.6'yı 11.0'a yuvarlar
+    # Bu, borsa hassasiyetine en yakın yuvarlamayı sağlar.
+    rounded_d_value = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    format_string = f"{{:.{max(0, num_decimals_from_step)}f}}" 
-    return format_string.format(rounded_d_value)
+    # Yuvarlanmış Decimal değerini, hesaplanan ondalık basamak sayısıyla stringe dönüştür.
+    # Burada .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir.
+    return f"{rounded_d_value:.{num_decimals_from_step}f}"
 
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
@@ -116,7 +116,6 @@ def webhook():
     print(f"📩 Webhook verisi alındı: {data}")
 
     try:
-        # Ham sinyali kuyruğa ekle
         signal_message_for_telegram = f"<b>🔔 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(data, indent=2)}</pre>"
         send_telegram_message_to_queue(signal_message_for_telegram)
         
@@ -236,7 +235,7 @@ def webhook():
             return jsonify({"status": "error", "message": error_msg}), 400
 
         # ADIM 1: Risk bazlı miktarı hesapla
-        quantity_from_risk = risk_dolar / abs(entry_rounded - sl_rounded) 
+        quantity_from_risk = risk_dolar / abs(entry_rounded - sl_rounded) # Yuvarlanmış değerlerle hesapla
         
         # ADIM 2: Maksimum notional değer bazlı miktarı hesapla
         quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded != 0 else float('inf')
