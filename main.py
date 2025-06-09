@@ -41,22 +41,12 @@ def round_to_precision(value, precision_step):
     if precision_step <= 0: 
         return float(value) 
 
-    # precision_step'i ondalık basamak sayısına çevir
-    # Örneğin, 0.0001 için 4 ondalık basamak
-    s = str(precision_step)
-    if 'e' in s: # Bilimsel gösterim varsa
-        parts = s.split('e')
-        num_decimals = -int(parts[1]) if '.' not in parts[0] else len(parts[0].split('.')[1]) - int(parts[1])
-    elif '.' in s: # Normal ondalık sayı
-        num_decimals = len(s.split('.')[1])
-    else: # Tam sayı
-        num_decimals = 0
-    
-    # Yeni precision_decimal oluştur
-    precision_format = "0." + "0" * num_decimals
-    precision_decimal = decimal.Decimal(precision_format)
+    # precision_step'i Decimal nesnesine çevirirken doğrudan kullanmak
+    # Bybit'in hassasiyetlerini daha doğru yansıtabilir.
+    # Örneğin, 0.0001 -> Decimal('0.0001')
+    precision_decimal = decimal.Decimal(str(precision_step))
 
-    # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_HALF_UP daha standarttır)
+    # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_HALF_UP standart ve güvenlidir)
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
 
@@ -130,9 +120,10 @@ def webhook():
         risk_dolar = 5.0 
         target_position_value_usd = 200.0 
 
-        # SL ve Entry aynı ise işlem yapma (risk anlamsız olur)
-        if abs(entry - sl) < 0.00000001: # Çok küçük bir eşik değeri (örn. 0.00000001)
-            error_msg = f"❗ Giriş fiyatı ({entry}) ve SL fiyatı ({sl}) çok yakın veya aynı. Risk anlamsız olduğu için emir gönderilmiyor."
+        # Giriş fiyatı ve SL aynı veya çok yakınsa emir gönderme
+        # Bu durumda risk anlamsız olur ve borsalar reddeder.
+        if abs(entry - sl) < 0.0000000001: # Çok küçük bir eşik değeri (örn. 0.0000000001)
+            error_msg = f"❗ GİRİŞ FİYATI ({entry}) ve STOP LOSS FİYATI ({sl}) AYNI VEYA ÇOK YAKIN. Risk anlamsız olduğu için emir gönderilmiyor. Lütfen Pine Script stratejinizi kontrol edin."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
