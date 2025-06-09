@@ -47,25 +47,34 @@ def round_to_precision(value, precision_step):
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
 
-# === Miktarı hassasiyete yuvarlama ve string olarak döndürme ===
+# === Miktarı güvenli bir ondalık hassasiyete yuvarlama ve string olarak döndürme ===
 def round_to_precision_str(value, precision_step):
     if value is None:
         return ""
     if precision_step <= 0:
         return str(float(value))
 
+    # precision_step'ten ondalık basamak sayısını doğru bir şekilde alalım
     s = str(precision_step)
-    if 'e' in s: 
-        num_decimals = abs(int(s.split('e')[-1]))
-    elif '.' in s: 
-        num_decimals = len(s.split('.')[1])
-    else: 
-        num_decimals = 0
+    if 'e' in s: # Bilimsel gösterim varsa (örn: '1e-06' -> 6 ondalık basamak)
+        num_decimals_from_step = abs(int(s.split('e')[-1]))
+    elif '.' in s: # Normal ondalık sayı (örn: '0.0001' -> 4 ondalık basamak)
+        num_decimals_from_step = len(s.split('.')[1])
+    else: # Tam sayı (örn: '1.0' veya '1')
+        num_decimals_from_step = 0
     
+    # Bybit'in nadiren kabul ettiği çok yüksek hassasiyetleri önlemek için
+    # maksimum ondalık basamak sayısını manuel olarak sınırla.
+    # Çoğu kripto parite için 6 ondalık basamak yeterli olmalı.
+    # Daha düşük fiyatlı pariteler için daha yüksek gerekebilir, ama şimdilik 6 deneyelim.
+    safe_num_decimals = min(num_decimals_from_step, 6) # Buradaki 6 değeri değiştirilebilir
+
+
     d_value = decimal.Decimal(str(value))
-    d_precision_step = decimal.Decimal(str(precision_step))
     
-    rounded_d_value = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
+    # İstenen ondalık basamak sayısına göre yuvarlama
+    format_template = "0." + "0" * safe_num_decimals
+    rounded_d_value = d_value.quantize(decimal.Decimal(format_template), rounding=decimal.ROUND_HALF_UP)
     
     # Sondaki gereksiz sıfırları normalleştirip stringe dönüştür
     return f"{rounded_d_value.normalize():f}"
@@ -142,9 +151,7 @@ def webhook():
         risk_dolar = 5.0 
         
         # Hedeflenen maksimum pozisyon değeri (kaldıraç dahil notional value)
-        # Bu, her işlemde kullanılacak maksimum pozisyon büyüklüğüdür.
-        # Örneğin, 100 USDT pozisyon değeri için 10x kaldıraç ile 10 USDT teminat kullanılır.
-        max_notional_value_per_trade_usd = 100.0 # <<< Yeni AYAR: Maksimum pozisyon değeri 100$ olarak belirlendi
+        max_notional_value_per_trade_usd = 100.0 
 
         # Giriş fiyatı ve SL aynı veya çok yakınsa emir gönderme
         if abs(entry - sl) < 0.0000000001: 
@@ -157,12 +164,9 @@ def webhook():
         quantity_from_risk = risk_dolar / abs(entry - sl) 
         
         # ADIM 2: Maksimum notional değer bazlı miktarı hesapla
-        # entry 0 olmamalıdır, ancak güvenlik için kontrol edilebilir.
         quantity_from_notional_limit = max_notional_value_per_trade_usd / entry if entry != 0 else float('inf')
 
-        # ADIM 3: İki hesaplamadan en küçüğünü al (hem riski hem de pozisyon değerini kontrol etmek için)
-        # Eğer risk bazlı miktar, limit bazlı miktardan küçükse, riske bağlı kalırız.
-        # Eğer limit bazlı miktar daha küçükse, pozisyon değerini limitleriz.
+        # ADIM 3: İki hesaplamadan en küçüğünü al
         final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_notional_limit)
 
         send_telegram_message(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.6f}, Hedef değer bazlı miktar: {quantity_from_notional_limit:.6f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.6f}")
@@ -215,7 +219,7 @@ def webhook():
         sl = round_to_precision(sl, tick_size)
         tp = round_to_precision(tp, tick_size)
         
-        # Miktarı lot_size'a göre yuvarla ve string olarak al. 
+        # Miktarı güvenli ondalık hassasiyete yuvarla ve string olarak al. 
         quantity_str_for_bybit = round_to_precision_str(final_calculated_quantity_pre_round, lot_size)
         
         # Limit kontrollerini yapmak için string'i tekrar float'a çeviriyoruz
@@ -241,7 +245,6 @@ def webhook():
             return jsonify({"status": "error", "message": error_msg}), 400
 
         # Gizli minimum işlem değerini kontrol etmek için (Bybit bazen 0.0 döndürse bile gerçekte bir limiti vardır)
-        # API'den gelen min_order_value veya manuel olarak 10.0 USDT'den büyük olanı al
         implied_min_order_value = max(10.0, min_order_value) 
 
         order_value = quantity_float_for_checks * entry
@@ -264,6 +267,7 @@ def webhook():
             f"<b>Hesaplanan Fiili Risk (SL vurulursa):</b> ${actual_risk_if_sl_hit:.2f}" 
         )
         send_telegram_message(trade_summary)
+        send_telegram_message(f"DEBUG: Bybit'e gönderilen son miktar (string): {quantity_str_for_bybit}")
 
         order = session.place_order(
             category="linear", 
