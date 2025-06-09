@@ -54,29 +54,24 @@ def round_to_precision_str(value, precision_step):
     if precision_step <= 0:
         return str(float(value))
 
-    # precision_step'ten ondalık basamak sayısını doğru bir şekilde alalım
     s = str(precision_step)
-    if 'e' in s: # Bilimsel gösterim varsa (örn: '1e-06' -> 6 ondalık basamak)
+    if 'e' in s: 
         num_decimals_from_step = abs(int(s.split('e')[-1]))
-    elif '.' in s: # Normal ondalık sayı (örn: '0.0001' -> 4 ondalık basamak)
+    elif '.' in s: 
         num_decimals_from_step = len(s.split('.')[1])
-    else: # Tam sayı (örn: '1.0' veya '1')
+    else: 
         num_decimals_from_step = 0
     
     # Bybit'in nadiren kabul ettiği çok yüksek hassasiyetleri önlemek için
     # maksimum ondalık basamak sayısını manuel olarak sınırla.
-    # Çoğu kripto parite için 6 ondalık basamak yeterli olmalı.
-    # Daha düşük fiyatlı pariteler için daha yüksek gerekebilir, ama şimdilik 6 deneyelim.
-    safe_num_decimals = min(num_decimals_from_step, 6) # Buradaki 6 değeri değiştirilebilir
-
+    # Genellikle 6-8 ondalık basamak yeterlidir.
+    safe_num_decimals = min(num_decimals_from_step, 8) # Buradaki 8 değeri değiştirilebilir, 6'dan 8'e çıkarıldı
 
     d_value = decimal.Decimal(str(value))
     
-    # İstenen ondalık basamak sayısına göre yuvarlama
     format_template = "0." + "0" * safe_num_decimals
     rounded_d_value = d_value.quantize(decimal.Decimal(format_template), rounding=decimal.ROUND_HALF_UP)
     
-    # Sondaki gereksiz sıfırları normalleştirip stringe dönüştür
     return f"{rounded_d_value.normalize():f}"
 
 
@@ -147,30 +142,8 @@ def webhook():
             return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
 
         # === RİSK YÖNETİMİ AYARI BURADA ===
-        # Hedeflenen sabit dolar riski
         risk_dolar = 5.0 
-        
-        # Hedeflenen maksimum pozisyon değeri (kaldıraç dahil notional value)
         max_notional_value_per_trade_usd = 100.0 
-
-        # Giriş fiyatı ve SL aynı veya çok yakınsa emir gönderme
-        if abs(entry - sl) < 0.0000000001: 
-            error_msg = f"❗ GİRİŞ FİYATI ({entry}) ve STOP LOSS FİYATI ({sl}) AYNI VEYA ÇOK YAKIN. Risk anlamsız olduğu için emir gönderilmiyor. Lütfen Pine Script stratejinizi kontrol edin."
-            print(error_msg)
-            send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
-        # ADIM 1: Risk bazlı miktarı hesapla
-        quantity_from_risk = risk_dolar / abs(entry - sl) 
-        
-        # ADIM 2: Maksimum notional değer bazlı miktarı hesapla
-        quantity_from_notional_limit = max_notional_value_per_trade_usd / entry if entry != 0 else float('inf')
-
-        # ADIM 3: İki hesaplamadan en küçüğünü al
-        final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_notional_limit)
-
-        send_telegram_message(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.6f}, Hedef değer bazlı miktar: {quantity_from_notional_limit:.6f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.6f}")
-
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
@@ -215,10 +188,31 @@ def webhook():
             print(error_msg_api)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg_api}")
 
-        entry = round_to_precision(entry, tick_size)
-        sl = round_to_precision(sl, tick_size)
-        tp = round_to_precision(tp, tick_size)
+        # Fiyatları Bybit'in hassasiyetine yuvarla (float olarak kalırlar)
+        entry_rounded = round_to_precision(entry, tick_size)
+        sl_rounded = round_to_precision(sl, tick_size)
+        tp_rounded = round_to_precision(tp, tick_size)
         
+        # === KRİTİK KONTROL: YUVARLAMA SONRASI SL VE ENTRY AYNI MI? ===
+        # Floating point hatalarını önlemek için yuvarlanmış değerlerin string hallerini karşılaştır
+        if str(entry_rounded) == str(sl_rounded):
+            error_msg = f"❗ GİRİŞ FİYATI ({entry_rounded}) ve STOP LOSS FİYATI ({sl_rounded}) YUVARLAMA SONRASI AYNI GELDİ. Risk anlamsız olduğu için emir gönderilmiyor. Lütfen Pine Script stratejinizi kontrol edin ve SL'nin Girişten belirgin bir mesafede olduğundan emin olun."
+            print(error_msg)
+            send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
+
+        # ADIM 1: Risk bazlı miktarı hesapla
+        quantity_from_risk = risk_dolar / abs(entry_rounded - sl_rounded) # Yuvarlanmış değerlerle hesapla
+        
+        # ADIM 2: Maksimum notional değer bazlı miktarı hesapla
+        quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded != 0 else float('inf')
+
+        # ADIM 3: İki hesaplamadan en küçüğünü al
+        final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_notional_limit)
+
+        send_telegram_message(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.8f}, Hedef değer bazlı miktar: {quantity_from_notional_limit:.8f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.8f}")
+        send_telegram_message(f"DEBUG: Yuvarlanmış Entry: {entry_rounded}, SL: {sl_rounded}, TP: {tp_rounded}")
+
         # Miktarı güvenli ondalık hassasiyete yuvarla ve string olarak al. 
         quantity_str_for_bybit = round_to_precision_str(final_calculated_quantity_pre_round, lot_size)
         
@@ -247,23 +241,23 @@ def webhook():
         # Gizli minimum işlem değerini kontrol etmek için (Bybit bazen 0.0 döndürse bile gerçekte bir limiti vardır)
         implied_min_order_value = max(10.0, min_order_value) 
 
-        order_value = quantity_float_for_checks * entry
+        order_value = quantity_float_for_checks * entry_rounded
         if implied_min_order_value > 0 and order_value < implied_min_order_value:
             error_msg = f"❗ Nihai pozisyon değeri ({order_value:.2f} USDT) belirlenen minimum emir değeri ({implied_min_order_value} USDT) altındadır. Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry - sl))
+        actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry_rounded - sl_rounded))
         
         trade_summary = (
             f"<b>📢 YENİ EMİR SİPARİŞİ (Hedef Risk: ${risk_dolar:.2f}, Maks. Poz. Değeri: ${max_notional_value_per_trade_usd:.2f}):</b>\n" 
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side_for_bybit.upper()}\n" 
             f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n" 
-            f"<b>Giriş Fiyatı:</b> {entry}\n"
-            f"<b>Stop Loss (SL):</b> {sl}\n"
-            f"<b>Take Profit (TP):</b> {tp}\n"
+            f"<b>Giriş Fiyatı:</b> {entry_rounded}\n" # Yuvarlanmış hali göster
+            f"<b>Stop Loss (SL):</b> {sl_rounded}\n" # Yuvarlanmış hali göster
+            f"<b>Take Profit (TP):</b> {tp_rounded}\n" # Yuvarlanmış hali göster
             f"<b>Hesaplanan Fiili Risk (SL vurulursa):</b> ${actual_risk_if_sl_hit:.2f}" 
         )
         send_telegram_message(trade_summary)
@@ -276,8 +270,8 @@ def webhook():
             orderType="Market", 
             qty=quantity_str_for_bybit,  # Bybit'e string hali gönderildi
             timeInForce="GoodTillCancel", 
-            stopLoss=str(sl),   
-            takeProfit=str(tp)  
+            stopLoss=str(sl_rounded),   # Yuvarlanmış SL gönder
+            takeProfit=str(tp_rounded)  # Yuvarlanmış TP gönder
         )
 
         print(f"✅ Emir gönderildi: {order}")
