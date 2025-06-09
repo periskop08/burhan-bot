@@ -41,11 +41,7 @@ def round_to_precision(value, precision_step):
     if precision_step <= 0: 
         return float(value) 
 
-    # precision_step'i Decimal nesnesine çevirirken doğrudan kullanmak
-    # Bybit'in hassasiyetlerini daha doğru yansıtabilir.
-    # Örneğin, 0.0001 -> Decimal('0.0001')
     precision_decimal = decimal.Decimal(str(precision_step))
-
     # Değeri Decimal nesnesine çevir ve yuvarla (ROUND_HALF_UP standart ve güvenlidir)
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
@@ -98,7 +94,7 @@ def webhook():
             error_msg = "❗ Sembol bilgisi eksik!"
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
+            return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
 
         if not all([symbol, side, entry, sl, tp]):
             error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
@@ -118,17 +114,15 @@ def webhook():
 
         # === RİSK YÖNETİMİ AYARI BURADA ===
         risk_dolar = 5.0 
-        target_position_value_usd = 200.0 
+        target_position_value_usd = 500.0  # << Güncellendi: Hedef pozisyon değeri 500$
 
         # Giriş fiyatı ve SL aynı veya çok yakınsa emir gönderme
-        # Bu durumda risk anlamsız olur ve borsalar reddeder.
-        if abs(entry - sl) < 0.0000000001: # Çok küçük bir eşik değeri (örn. 0.0000000001)
+        if abs(entry - sl) < 0.0000000001: 
             error_msg = f"❗ GİRİŞ FİYATI ({entry}) ve STOP LOSS FİYATI ({sl}) AYNI VEYA ÇOK YAKIN. Risk anlamsız olduğu için emir gönderilmiyor. Lütfen Pine Script stratejinizi kontrol edin."
             print(error_msg)
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Hedef pozisyon büyüklüğüne göre adet hesapla (geçici olarak)
         calculated_quantity_initial = target_position_value_usd / entry 
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
@@ -178,10 +172,6 @@ def webhook():
         sl = round_to_precision(sl, tick_size)
         tp = round_to_precision(tp, tick_size)
         
-        # Nihai miktar, lot_size'a göre yuvarlanmış hali
-        # Bu, hedef pozisyon değerini (target_position_value_usd) en iyi şekilde yansıtacak şekilde
-        # Bybit'in miktar adımlarına (lot_size) göre ayarlanır.
-        # Önce ham miktarı hesapla, sonra lot_size'a yuvarla
         quantity = round_to_precision(calculated_quantity_initial, lot_size)
         
         # Yuvarlandıktan sonra limit kontrollerini tekrar yap
@@ -210,7 +200,6 @@ def webhook():
             send_telegram_message(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Hesaplanan fiili riski de Telegram'a gönder
         actual_risk_if_sl_hit = abs(quantity * (entry - sl))
         if actual_risk_if_sl_hit > risk_dolar:
             send_telegram_message(f"⚠️ DİKKAT: Hesaplanan fiili risk (${actual_risk_if_sl_hit:.2f}) hedef risk (${risk_dolar:.2f}) üzerindedir. Bu, {target_position_value_usd}$ hedef pozisyon büyüklüğünden kaynaklanmaktadır.")
