@@ -234,15 +234,21 @@ def webhook():
             send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # ADIM 1: Risk bazlı miktarı hesapla
-        quantity_from_risk = risk_dolar / abs(entry_rounded - sl_rounded) # Yuvarlanmış değerlerle hesapla
-        
-        # ADIM 2: Maksimum notional değer bazlı miktarı hesapla
-        quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded != 0 else float('inf')
+       # === Risk ve Ödül Oranı Hesabı ===
+            reward_dollar = 10.0  # Maksimum kazanç sınırı (TP)
+            actual_risk_per_unit = abs(entry_rounded - sl_rounded)
+            actual_reward_per_unit = abs(tp_rounded - entry_rounded)
 
-        # ADIM 3: İki hesaplamadan en küçüğünü al
-        final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_notional_limit)
+# Her iki taraftan gelen maksimum işlem boyutunu hesapla
+            quantity_from_risk = risk_dolar / actual_risk_per_unit if actual_risk_per_unit > 0 else float('inf')
+            quantity_from_reward = reward_dollar / actual_reward_per_unit if actual_reward_per_unit > 0 else float('inf')
 
+# Maksimum pozisyon büyüklüğü limitine göre de sınırla
+            quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded > 0 else float('inf')
+
+# Üç hesaplamadan en düşük olanı seç
+        final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_reward, quantity_from_notional_limit)
+        send_telegram_message_to_queue(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.8f}, Ödül bazlı miktar: {quantity_from_reward:.8f}, Notional limitli miktar: {quantity_from_notional_limit:.8f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.8f}")
         send_telegram_message_to_queue(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.8f}, Hedef değer bazlı miktar: {quantity_from_notional_limit:.8f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.8f}")
         send_telegram_message_to_queue(f"DEBUG: Yuvarlanmış Entry: {entry_rounded}, SL: {sl_rounded}, TP: {tp_rounded}")
 
