@@ -235,16 +235,14 @@ def webhook():
             return jsonify({"status": "error", "message": error_msg}), 400
 
        # === Risk ve Ödül Oranı Hesabı ===
-            reward_dollar = 10.0  # Maksimum kazanç sınırı (TP)
-            actual_risk_per_unit = abs(entry_rounded - sl_rounded)
-            actual_reward_per_unit = abs(tp_rounded - entry_rounded)
+        reward_dollar = 10.0  # Maksimum kazanç sınırı (TP)
+        actual_risk_per_unit = abs(entry_rounded - sl_rounded)
+        actual_reward_per_unit = abs(tp_rounded - entry_rounded)
 
 # Her iki taraftan gelen maksimum işlem boyutunu hesapla
-            quantity_from_risk = risk_dolar / actual_risk_per_unit if actual_risk_per_unit > 0 else float('inf')
-            quantity_from_reward = reward_dollar / actual_reward_per_unit if actual_reward_per_unit > 0 else float('inf')
-
-# Maksimum pozisyon büyüklüğü limitine göre de sınırla
-            quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded > 0 else float('inf')
+        quantity_from_risk = risk_dolar / actual_risk_per_unit if actual_risk_per_unit > 0 else float('inf')
+        quantity_from_reward = reward_dollar / actual_reward_per_unit if actual_reward_per_unit > 0 else float('inf')
+        quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded > 0 else float('inf')
 
 # Üç hesaplamadan en düşük olanı seç
         final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_reward, quantity_from_notional_limit)
