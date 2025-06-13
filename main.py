@@ -18,18 +18,13 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
-
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
-# === Telegram Mesaj Kuyruğu ve İşleyici ===
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
-TELEGRAM_RATE_LIMIT_DELAY = 1.0 # Telegram'a en az 1 saniyede bir mesaj gönder
+TELEGRAM_RATE_LIMIT_DELAY = 1.0
 
 def telegram_message_sender():
-    """
-    Kuyruktaki Telegram mesajlarını rate limit'e uygun şekilde gönderir.
-    """
     global LAST_TELEGRAM_MESSAGE_TIME
     while True:
         if not telegram_message_queue.empty():
@@ -43,17 +38,17 @@ def telegram_message_sender():
                 }
                 try:
                     response = requests.post(TELEGRAM_URL, json=payload)
-                    response.raise_for_status() 
-                    print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") 
+                    response.raise_for_status()
+                    print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...")
                     LAST_TELEGRAM_MESSAGE_TIME = current_time
                 except requests.exceptions.RequestException as e:
-                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}. Mesaj KAYBEDİLDİ (tekrar kuyruğa eklenmiyor).")
+                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}.")
                 finally:
-                    telegram_message_queue.task_done() 
+                    telegram_message_queue.task_done()
             else:
-                time.sleep(TELEGRAM_RATE_LIMIT_DELAY - (current_time - LAST_TELEGRAM_MESSAGE_TIME)) 
+                time.sleep(TELEGRAM_RATE_LIMIT_DELAY - (current_time - LAST_TELEGRAM_MESSAGE_TIME))
         else:
-            time.sleep(0.1) 
+            time.sleep(0.1)
 
 telegram_sender_thread = threading.Thread(target=telegram_message_sender, daemon=True)
 telegram_sender_thread.start()
@@ -64,282 +59,113 @@ def send_telegram_message_to_queue(message_text):
         return
     telegram_message_queue.put(message_text)
 
-
-# === Yardımcı Fonksiyon: Fiyatları hassasiyete yuvarlama (float döndürür) ===
 def round_to_precision(value, precision_step):
     if value is None:
         return None
-    if precision_step <= 0: 
-        return float(value) 
-
+    if precision_step <= 0:
+        return float(value)
     precision_decimal = decimal.Decimal(str(precision_step))
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
 
-# === Miktarı, borsa adım hassasiyetine göre yuvarlama ve string olarak döndürme ===
 def round_to_precision_str(value, precision_step):
     if value is None:
         return ""
     if precision_step <= 0:
         return str(float(value))
-
     s_precision_step = str(precision_step)
     num_decimals_from_step = 0
-
-    if 'e' in s_precision_step: 
+    if 'e' in s_precision_step:
         parts = s_precision_step.split('e')
         if '.' in parts[0]:
             num_decimals_from_step = len(parts[0].split('.')[1])
-        num_decimals_from_step += abs(int(parts[1])) # Bilimsel notasyondaki üssü de dikkate al
-        
-    elif '.' in s_precision_step: 
+        num_decimals_from_step += abs(int(parts[1]))
+    elif '.' in s_precision_step:
         num_decimals_from_step = len(s_precision_step.split('.')[1])
-    
-    # Decimal kütüphanesi ile yüksek hassasiyetle yuvarlama
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(s_precision_step)
-    
-    # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
-    # Yani 10.5'i 0.5 adımla yuvarlarsak 10.5 olur, 10.6'yı 11.0'a yuvarlar
-    # Bu, borsa hassasiyetine en yakın yuvarlamayı sağlar.
     rounded_d_value = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
-    
-    # Yuvarlanmış Decimal değerini, hesaplanan ondalık basamak sayısıyla stringe dönüştür.
-    # Burada .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir.
     return f"{rounded_d_value:.{num_decimals_from_step}f}"
 
-
-# === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
     print(f"📩 Webhook verisi alındı: {data}")
-
     try:
-        signal_message_for_telegram = f"<b>🔔 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(data, indent=2)}</pre>"
-        send_telegram_message_to_queue(signal_message_for_telegram)
-        
+        send_telegram_message_to_queue(f"<b>🔔 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(data, indent=2)}</pre>")
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
-        sl = data.get("sl") 
-        tp = data.get("tp") 
-
-        side_for_bybit = ""
-        if side and side.lower() == "buy":
-            side_for_bybit = "Buy"
-        elif side and side.lower() == "sell":
-            side_for_bybit = "Sell"
-        elif side and side.lower() == "long": 
-            side_for_bybit = "Buy"
-        elif side and side.lower() == "short": 
-            side_for_bybit = "Sell"
-        else:
-            error_msg = f"❗ Geçersiz işlem yönü (side): {side}. 'Buy' veya 'Sell' bekleniyor."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
-        if symbol: 
-            if ":" in symbol:
-                symbol = symbol.split(":")[-1]
-                print(f"Sembol TradingView prefix'inden temizlendi: {symbol}")
-                send_telegram_message_to_queue(f"ℹ️ Sembol prefix temizlendi: <b>{symbol}</b>")
-            
-            if symbol.endswith(".P"):
-                symbol = symbol[:-2] 
-                print(f"Sembol '.P' ekinden temizlendi: {symbol}")
-                send_telegram_message_to_queue(f"ℹ️ Sembol '.P' eki temizlendi: <b>{symbol}</b>")
-            
-            symbol = symbol.upper()
-            send_telegram_message_to_queue(f"ℹ️ Nihai işlem sembolü: <b>{symbol}</b>")
-        else:
-            error_msg = "❗ Sembol bilgisi eksik!"
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
+        sl = data.get("sl")
+        tp = data.get("tp")
 
         if not all([symbol, side, entry, sl, tp]):
-            error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
+            msg = f"Eksik veri: {symbol}, {side}, {entry}, {sl}, {tp}"
+            send_telegram_message_to_queue(f"🚨 {msg}")
+            return jsonify({"error": msg}), 400
 
-        try:
-            entry = float(entry)
-            sl = float(sl)
-            tp = float(tp)
-        except (ValueError, TypeError) as ve:
-            error_msg = f"❗ Fiyat verileri sayıya çevrilemedi: Entry={entry}, SL={sl}, TP={tp}. Hata: {ve}. Lütfen Pine Script alert formatını kontrol edin."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
+        if ":" in symbol:
+            symbol = symbol.split(":")[-1]
+        if symbol.endswith(".P"):
+            symbol = symbol[:-2]
+        symbol = symbol.upper()
+        send_telegram_message_to_queue(f"ℹ️ Nihai işlem sembolü: <b>{symbol}</b>")
 
-        # === RİSK YÖNETİMİ AYARI BURADA ===
-        risk_dolar = 5.0 
-        max_notional_value_per_trade_usd = 100.0 
+        entry = float(entry)
+        sl = float(sl)
+        tp = float(tp)
+
+        side_for_bybit = "Buy" if side.lower() in ["buy", "long"] else "Sell"
 
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
-        tick_size = 0.000001 
-        lot_size = 0.000001  
-        min_order_qty = 0.0  
-        max_order_qty = float('inf') 
-        min_order_value = 0.0 
-        
-        try:
-            exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
-            if exchange_info_response and exchange_info_response['retCode'] == 0 and exchange_info_response['result']['list']:
-                instrument_info = exchange_info_response['result']['list'][0]
-                price_filter = instrument_info.get('priceFilter', {})
-                lot_filter = instrument_info.get('lotFilter', {})
+        precision = session.get_instruments_info(category="linear", symbol=symbol)
+        lot_info = precision['result']['list'][0]['lotFilter']
+        tick_info = precision['result']['list'][0]['priceFilter']
 
-                if 'tickSize' in price_filter:
-                    tick_size = float(price_filter['tickSize'])
-                
-                if 'qtyStep' in lot_filter:
-                    lot_size = float(lot_filter['qtyStep'])
-                elif 'minTradingQty' in lot_filter: 
-                    lot_size = float(lot_filter['minTradingQty'])
+        tick_size = float(tick_info.get("tickSize", 0.0001))
+        lot_size = float(lot_info.get("qtyStep", 0.0001))
 
-                if 'minOrderQty' in lot_filter:
-                    min_order_qty = float(lot_filter['minOrderQty'])
-                
-                if 'maxOrderQty' in lot_filter: 
-                    max_order_qty = float(lot_filter['maxOrderQty'])
-
-                if 'minOrderValue' in lot_filter: 
-                    min_order_value = float(lot_filter['minOrderValue'])
-
-                print(f"Bybit {symbol} için API'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}, Min Order Qty: {min_order_qty}, Max Order Qty: {max_order_qty}, Min Order Value: {min_order_value}")
-                send_telegram_message_to_queue(f"ℹ️ {symbol} için Bybit hassasiyetleri alındı:\nFiyat Adımı: <code>{tick_size}</code>\nMiktar Adımı: <code>{lot_size}</code>\nMin Emir Miktarı: <code>{min_order_qty}</code>\nMax Emir Miktarı: <code>{max_order_qty}</code>\nMin Emir Değeri: <code>{min_order_value} USDT</code>")
-            else:
-                print(f"Uyarı: {symbol} için Bybit hassasiyet bilgisi bulunamadı. API yanıtı: {exchange_info_response}. Varsayılanlar kullanılıyor.")
-                send_telegram_message_to_queue(f"⚠️ {symbol} için Bybit hassasiyet bilgisi alınamadı. Varsayılanlar kullanılıyor.")
-
-        except Exception as api_e:
-            error_msg_api = f"Bybit sembol/hassasiyet bilgisi alınırken hata: {api_e}. Varsayılan hassasiyetler kullanılıyor."
-            print(error_msg_api)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg_api}")
-
-        # Fiyatları Bybit'in hassasiyetine yuvarla (float olarak kalırlar)
         entry_rounded = round_to_precision(entry, tick_size)
         sl_rounded = round_to_precision(sl, tick_size)
         tp_rounded = round_to_precision(tp, tick_size)
-        
-        # === KRİTİK KONTROL: YUVARLAMA SONRASI SL VE ENTRY AYNI MI? ===
-        if str(entry_rounded) == str(sl_rounded):
-            error_msg = f"❗ GİRİŞ FİYATI ({entry_rounded}) ve STOP LOSS FİYATI ({sl_rounded}) YUVARLAMA SONRASI AYNI GELDİ. Risk anlamsız olduğu için emir gönderilmiyor. Lütfen Pine Script stratejinizi kontrol edin ve SL'nin Girişten belirgin bir mesafede olduğundan emin olun."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
 
-       # === Risk ve Ödül Oranı Hesabı ===
-        reward_dollar = 10.0  # Maksimum kazanç sınırı (TP)
-        actual_risk_per_unit = abs(entry_rounded - sl_rounded)
-        actual_reward_per_unit = abs(tp_rounded - entry_rounded)
+        reward_dollar = 10.0
+        risk_dollar = 5.0
+        risk_per_unit = abs(entry_rounded - sl_rounded)
+        reward_per_unit = abs(tp_rounded - entry_rounded)
 
-# Her iki taraftan gelen maksimum işlem boyutunu hesapla
-        quantity_from_risk = risk_dolar / actual_risk_per_unit if actual_risk_per_unit > 0 else float('inf')
-        quantity_from_reward = reward_dollar / actual_reward_per_unit if actual_reward_per_unit > 0 else float('inf')
-        quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded > 0 else float('inf')
+        quantity_risk = risk_dollar / risk_per_unit if risk_per_unit > 0 else float('inf')
+        quantity_reward = reward_dollar / reward_per_unit if reward_per_unit > 0 else float('inf')
+        quantity_max_notional = 100.0 / entry_rounded
 
-# Üç hesaplamadan en düşük olanı seç
-        final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_reward, quantity_from_notional_limit)
-        send_telegram_message_to_queue(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.8f}, Ödül bazlı miktar: {quantity_from_reward:.8f}, Notional limitli miktar: {quantity_from_notional_limit:.8f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.8f}")
-        send_telegram_message_to_queue(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.8f}, Hedef değer bazlı miktar: {quantity_from_notional_limit:.8f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.8f}")
-        send_telegram_message_to_queue(f"DEBUG: Yuvarlanmış Entry: {entry_rounded}, SL: {sl_rounded}, TP: {tp_rounded}")
+        qty = min(quantity_risk, quantity_reward, quantity_max_notional)
+        qty_str = round_to_precision_str(qty, lot_size)
 
-        # Miktarı güvenli ondalık hassasiyete yuvarla ve string olarak al. 
-        quantity_str_for_bybit = round_to_precision_str(final_calculated_quantity_pre_round, lot_size)
-        
-        # Limit kontrollerini yapmak için string'i tekrar float'a çeviriyoruz
-        quantity_float_for_checks = float(quantity_str_for_bybit)
+        send_telegram_message_to_queue(f"📊 Qty hesaplaması: Risk bazlı: {quantity_risk:.4f}, Ödül bazlı: {quantity_reward:.4f}, Notional: {quantity_max_notional:.4f} → Seçilen: {qty_str}")
 
-        # Yuvarlandıktan sonra limit kontrollerini tekrar yap (float haliyle)
-        if quantity_float_for_checks < min_order_qty:
-            error_msg = f"❗ Nihai miktar ({quantity_float_for_checks}) minimum emir miktarı ({min_order_qty}) altındadır. Emir gönderilmiyor."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-        
-        if quantity_float_for_checks > max_order_qty:
-            error_msg = f"❗ Nihai miktar ({quantity_float_for_checks}) maksimum emir miktarı ({max_order_qty}) üstündedir. Emir gönderilmiyor."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
-        if quantity_float_for_checks <= 0: 
-            error_msg = f"❗ Nihai hesaplanan miktar sıfır veya negatif ({quantity_float_for_checks}). Emir gönderilmiyor."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
-        # Gizli minimum işlem değerini kontrol etmek için (Bybit bazen 0.0 döndürse bile gerçekte bir limiti vardır)
-        implied_min_order_value = max(10.0, min_order_value) 
-
-        order_value = quantity_float_for_checks * entry_rounded
-        if implied_min_order_value > 0 and order_value < implied_min_order_value:
-            error_msg = f"❗ Nihai pozisyon değeri ({order_value:.2f} USDT) belirlenen minimum emir değeri ({implied_min_order_value} USDT) altındadır. Emir gönderilmiyor."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
-        actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry_rounded - sl_rounded))
-        
-        trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ (Hedef Risk: ${risk_dolar:.2f}, Maks. Poz. Değeri: ${max_notional_value_per_trade_usd:.2f}):</b>\n" 
-            f"<b>Symbol:</b> {symbol}\n"
-            f"<b>Yön:</b> {side_for_bybit.upper()}\n" 
-            f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n" 
-            f"<b>Giriş Fiyatı:</b> {entry_rounded}\n" 
-            f"<b>Stop Loss (SL):</b> {sl_rounded}\n" 
-            f"<b>Take Profit (TP):</b> {tp_rounded}\n" 
-            f"<b>Hesaplanan Fiili Risk (SL vurulursa):</b> ${actual_risk_if_sl_hit:.2f}" 
-        )
-        send_telegram_message_to_queue(trade_summary)
-        send_telegram_message_to_queue(f"DEBUG: Bybit'e gönderilen son miktar (string): {quantity_str_for_bybit}")
-        
-        sabitMiktar = 400
-        miktar = round(float(sabitMiktar)/ float(entry),0)
         order = session.place_order(
-            category="linear", 
+            category="linear",
             symbol=symbol,
-            side=side_for_bybit, 
-            orderType="Market", 
-            qty=str(miktar),  # Bybit'e string hali gönderildi
-            timeInForce="GoodTillCancel", 
-            stopLoss=str(sl_rounded),   
-            takeProfit=str(tp_rounded)  
+            side=side_for_bybit,
+            orderType="Market",
+            qty=qty_str,
+            timeInForce="GoodTillCancel",
+            stopLoss=str(sl_rounded),
+            takeProfit=str(tp_rounded)
         )
 
-        print(f"✅ Emir gönderildi: {order}")
-
-        if order and order.get('retCode') == 0:
-            order_info = order.get('result', {})
-            success_message = (
-                f"<b>✅ Bybit Emir Başarılı!</b>\n"
-                f"<b>Emir ID:</b> <code>{order_info.get('orderId', 'N/A')}</code>\n"
-                f"<b>Sembol:</b> {order_info.get('symbol', 'N/A')}\n"
-                f"<b>Yön:</b> {order_info.get('side', 'N/A')}\n"
-                f"<b>Miktar:</b> {order_info.get('qty', 'N/A')}\n"
-                f"<b>Fiyat:</b> {order_info.get('price', 'N/A')}\n"
-                f"<b>Durum:</b> {order.get('retMsg', 'Başarılı')}"
-            )
-            send_telegram_message_to_queue(success_message)
-            return jsonify({"status": "ok", "order": order})
+        if order['retCode'] == 0:
+            send_telegram_message_to_queue(f"✅ Emir gönderildi: <b>{symbol}</b> {side.upper()} {qty_str} adet. SL: {sl_rounded}, TP: {tp_rounded}")
+            return jsonify(order)
         else:
-            error_response_msg = order.get('retMsg', 'Bilinmeyen Bybit hatası.')
-            full_error_details = json.dumps(order, indent=2) 
-            error_message_telegram = f"<b>🚨 Bybit Emir Hatası:</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity_float_for_checks}\n<pre>{full_error_details}</pre>"
-            send_telegram_message_to_queue(error_message_telegram)
-            return jsonify({"status": "error", "message": error_response_msg}), 500
+            send_telegram_message_to_queue(f"🚨 Emir hatası: {order.get('retMsg', 'Bilinmeyen hata')}")
+            return jsonify(order), 400
 
     except Exception as e:
-        error_message_full = f"🔥 Genel HATA webhook işlenirken: {str(e)}\n{traceback.format_exc()}"
-        print(error_message_full)
-        send_telegram_message_to_queue(f"<b>🚨 KRİTİK BOT HATASI!</b>\n<pre>{error_message_full}</pre>")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        tb = traceback.format_exc()
+        send_telegram_message_to_queue(f"🔥 HATA:\n{tb}")
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/", methods=["GET"])
 def home():
