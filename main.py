@@ -92,24 +92,22 @@ def round_quantity_to_exchange_precision(value, precision_step):
     d_precision_step = decimal.Decimal(str(precision_step))
 
     # Get the number of decimal places directly from the Decimal representation of precision_step
-    # The exponent is negative for decimal places (e.g., -6 for 0.000001)
-    # We need its absolute value for f-string formatting
-    # This is the most reliable way to determine precision from lot_size.
-    num_decimals = abs(d_precision_step.as_tuple().exponent)
+    num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
     
-    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını sınırla ===
-    # Bybit'in bazı paritelerde lot_size'dan daha az ondalık basamak bekleyebileceği durumlar için
-    # Eğer num_decimals 6'dan büyükse, onu 6'ya sınırlayalım.
-    # 0000USDT gibi çok düşük fiyatlı paritelerde 6-8 basamak yeterli olabilir.
-    # Bu değeri ihtiyaca göre ayarlayabiliriz.
-    safe_num_decimals = min(num_decimals, 6) # Burası 6 olarak sınırlandı, 8 yerine.
-    
+    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını daha dinamik sınırla ===
+    # Eğer miktarın tam sayı kısmı büyükse daha az ondalık basamak kullan,
+    # miktarın kendisi çok küçükse (0.x gibi) lot_size'dan gelen hassasiyeti koru.
+    if d_value >= 100: # Örneğin, 100 adetten büyükse (örn. 16870.xxxx gibi)
+        safe_num_decimals = min(num_decimals_from_step, 2) # Sadece 2 ondalık basamak
+    elif d_value >= 1: # Örneğin, 1-99 adet arası
+        safe_num_decimals = min(num_decimals_from_step, 4) # Sadece 4 ondalık basamak
+    else: # Miktar 1'den küçükse (0.x gibi)
+        safe_num_decimals = min(num_decimals_from_step, 6) # lot_size'dan gelen veya maks 6 ondalık basamak (genellikle yeterli)
+
     # Quantize the value to the precision_step (ensure it's a multiple of lot_size)
     rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    # Şimdi bu yuvarlanmış değeri, safe_num_decimals kadar ondalık basamakla stringe dönüştür
-    # F-string ile formatlarken num_decimals yerine safe_num_decimals kullanacağız.
-    # .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir.
+    # Şimdi bu yuvarlanmış değeri, belirlenen safe_num_decimals kadar ondalık basamakla stringe dönüştür
     return f"{rounded_d_value_by_step:.{safe_num_decimals}f}"
 
 
