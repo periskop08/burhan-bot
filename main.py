@@ -67,7 +67,6 @@ def send_telegram_message_to_queue(message_text):
         print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil. Mesaj kuyruğa eklenemedi.")
         return
     telegram_message_queue.put(message_text)
-    # print(f"Telegram mesajı KUYRUĞA EKLENDİ: {message_text[:100]}...") # Bu debug mesajı çok fazla çıktıya neden olabilir
 
 
 # === Yardımcı Fonksiyon: Fiyatları hassasiyete yuvarlama (float döndürür) ===
@@ -85,20 +84,29 @@ def round_to_precision(value, precision_step):
 def round_quantity_to_exchange_precision(value, precision_step):
     if value is None:
         return ""
-    if precision_step <= 0:
+    if precision_step <= 0: # Eğer precision_step 0 veya negatifse, direkt stringe çevir
         return str(float(value))
 
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(str(precision_step))
 
-    num_decimals = abs(d_precision_step.as_tuple().exponent)
+    # precision_step'ten ondalık basamak sayısını al
+    num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
     
-    # Quantize the value to the precision_step (ensure it's a multiple of lot_size)
+    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını kısıtla ===
+    # Eğer lot_size'dan gelen ondalık basamak sayısı çok fazlaysa (örn. 6'dan fazla),
+    # Bybit'in kabul edebileceği daha güvenli bir maksimuma düşür.
+    # Örneğin, çoğu Bybit paritesi için 4 ondalık basamak yeterlidir.
+    # Eğer num_decimals_from_step 4'ten küçükse onu kullan, değilse 4'ü kullan.
+    final_decimals_for_string = min(num_decimals_from_step, 4) 
+    
+    # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
+    # Bu, Decimal kütüphanesinin ana yuvarlama mantığıdır.
     rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    # Format the rounded value to the exact number of decimal places required by the precision_step
-    # No .normalize() here to ensure trailing zeros are kept if needed by exchange.
-    return f"{rounded_d_value_by_step:.{num_decimals}f}"
+    # Son olarak, yuvarlanmış değeri belirlenen ondalık basamak sayısıyla stringe dönüştür.
+    # .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir.
+    return f"{rounded_d_value_by_step:.{final_decimals_for_string}f}"
 
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
@@ -116,7 +124,7 @@ def webhook():
             headers = dict(request.headers)
             error_msg = f"❗ Webhook verisi JSON olarak ayrıştırılamadı. Muhtemelen geçersiz JSON formatı.\n" \
                         f"Headers: <pre>{json.dumps(headers, indent=2)}</pre>\n" \
-                        f"Raw Data (ilk 500 karakter): <pre>{raw_data[:500]}</pre>" # Daha fazla karakter logla
+                        f"Raw Data (ilk 500 karakter): <pre>{raw_data[:500]}</pre>" 
             print(error_msg)
             send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": "JSON ayrıştırma hatası veya geçersiz veri"}), 400
