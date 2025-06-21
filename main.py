@@ -7,11 +7,10 @@ import os
 import decimal
 import time
 import threading
-from queue import Queue 
+from queue import Queue
 
 app = Flask(__name__)
 
-# === Ortam Değişkenlerinden Ayarları Yükle ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -39,10 +38,10 @@ def telegram_message_sender():
                 try:
                     response = requests.post(TELEGRAM_URL, json=payload)
                     response.raise_for_status()
-                    print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...")
+                    print(f"\U0001f4e4 Telegram'a mesaj gönderildi: {message_text[:100]}...")
                     LAST_TELEGRAM_MESSAGE_TIME = current_time
                 except requests.exceptions.RequestException as e:
-                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}.")
+                    print(f"\U0001f525 Telegram mesajı gönderilirken hata oluştu: {e}.")
                 finally:
                     telegram_message_queue.task_done()
             else:
@@ -90,9 +89,9 @@ def round_to_precision_str(value, precision_step):
 @app.route("/webhook", methods=["POST"])
 def webhook():
     data = request.get_json()
-    print(f"📩 Webhook verisi alındı: {data}")
+    print(f"\U0001f4e9 Webhook verisi alındı: {data}")
     try:
-        send_telegram_message_to_queue(f"<b>🔔 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(data, indent=2)}</pre>")
+        send_telegram_message_to_queue(f"<b>\U0001f514 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(data, indent=2)}</pre>")
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
@@ -101,7 +100,7 @@ def webhook():
 
         if not all([symbol, side, entry, sl, tp]):
             msg = f"Eksik veri: {symbol}, {side}, {entry}, {sl}, {tp}"
-            send_telegram_message_to_queue(f"🚨 {msg}")
+            send_telegram_message_to_queue(f"\U0001f6a8 {msg}")
             return jsonify({"error": msg}), 400
 
         if ":" in symbol:
@@ -142,34 +141,62 @@ def webhook():
         qty = min(quantity_risk, quantity_reward, quantity_max_notional)
         qty_str = round_to_precision_str(qty, lot_size)
 
-        send_telegram_message_to_queue(f"📊 Qty hesaplaması: Risk bazlı: {quantity_risk:.4f}, Ödül bazlı: {quantity_reward:.4f}, Notional: {quantity_max_notional:.4f} → Seçilen: {qty_str}")
-
-        order = session.place_order(
-            category="linear",
-            symbol=symbol,
-            side=side_for_bybit,
-            orderType="Market",
-            qty=qty_str,
-            timeInForce="GoodTillCancel",
-            stopLoss=str(sl_rounded),
-            takeProfit=str(tp_rounded)
+        send_telegram_message_to_queue(
+            f"\U0001f4ca Qty hesaplaması: Risk bazlı: {quantity_risk:.4f}, Ödül bazlı: {quantity_reward:.4f}, Notional: {quantity_max_notional:.4f} → Seçilen: {qty_str}"
         )
 
-        if order['retCode'] == 0:
-            send_telegram_message_to_queue(f"✅ Emir gönderildi: <b>{symbol}</b> {side.upper()} {qty_str} adet. SL: {sl_rounded}, TP: {tp_rounded}")
+        send_telegram_message_to_queue(
+            f"\U0001f4cc Emir Özeti:\n"
+            f"Symbol: <b>{symbol}</b>\n"
+            f"Yön: <b>{side_for_bybit}</b>\n"
+            f"Giriş: <b>{entry_rounded}</b>\n"
+            f"SL: <b>{sl_rounded}</b>\n"
+            f"TP: <b>{tp_rounded}</b>\n"
+            f"Miktar: <b>{qty_str}</b>"
+        )
+
+        try:
+            order = session.place_order(
+                category="linear",
+                symbol=symbol,
+                side=side_for_bybit,
+                orderType="Market",
+                qty=qty_str,
+                timeInForce="GoodTillCancel",
+                stopLoss=str(sl_rounded),
+                takeProfit=str(tp_rounded)
+            )
+        except Exception as e:
+            tb = traceback.format_exc()
+            send_telegram_message_to_queue(f"\U0001f6a8 Bybit Emir Gönderiminde İstisna:\n<pre>{tb}</pre>")
+            print("❌ Bybit'e emir gönderilirken istisna:", e)
+            return jsonify({"error": str(e)}), 500
+
+        if order.get('retCode') == 0:
+            send_telegram_message_to_queue(
+                f"✅ Emir Başarılı: <b>{symbol}</b>\n"
+                f"Yön: <b>{side_for_bybit}</b>\n"
+                f"Miktar: <b>{qty_str}</b>\n"
+                f"SL: <b>{sl_rounded}</b> | TP: <b>{tp_rounded}</b>\n"
+                f"\U0001f4c4 Emir ID: <code>{order.get('result', {}).get('orderId', 'N/A')}</code>"
+            )
             return jsonify(order)
         else:
-            send_telegram_message_to_queue(f"🚨 Emir hatası: {order.get('retMsg', 'Bilinmeyen hata')}")
+            hata_mesaji = order.get('retMsg', 'Bilinmeyen hata')
+            detayli_log = json.dumps(order, indent=2)
+            send_telegram_message_to_queue(
+                f"\U0001f6a8 Bybit Emir Reddedildi:\n"
+                f"\U0001f4dd Hata Mesajı: <b>{hata_mesaji}</b>\n"
+                f"<pre>{detayli_log}</pre>"
+            )
+            print("❌ Bybit emir hatası:", detayli_log)
             return jsonify(order), 400
 
     except Exception as e:
         tb = traceback.format_exc()
-        send_telegram_message_to_queue(f"🔥 HATA:\n{tb}")
+        send_telegram_message_to_queue(f"\U0001f525 HATA:\n<pre>{tb}</pre>")
         return jsonify({"error": str(e)}), 500
 
 @app.route("/", methods=["GET"])
 def home():
-    return "Burhan-Bot aktif 💪"
-
-if __name__ == "__main__":
-    app.run(debug=True, port=os.getenv("PORT", 5000))
+    return "Burhan-Bot aktif
