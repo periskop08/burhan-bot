@@ -90,23 +90,14 @@ def round_quantity_to_exchange_precision(value, precision_step):
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(str(precision_step))
 
-    # precision_step'ten ondalık basamak sayısını al
-    num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
-    
-    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını kısıtla ===
-    # Eğer lot_size'dan gelen ondalık basamak sayısı çok fazlaysa (örn. 6'dan fazla),
-    # Bybit'in kabul edebileceği daha güvenli bir maksimuma düşür.
-    # Örneğin, çoğu Bybit paritesi için 4 ondalık basamak yeterlidir.
-    # Eğer num_decimals_from_step 4'ten küçükse onu kullan, değilse 4'ü kullan.
-    final_decimals_for_string = min(num_decimals_from_step, 4) 
-    
     # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
     # Bu, Decimal kütüphanesinin ana yuvarlama mantığıdır.
     rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    # Son olarak, yuvarlanmış değeri belirlenen ondalık basamak sayısıyla stringe dönüştür.
-    # .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir.
-    return f"{rounded_d_value_by_step:.{final_decimals_for_string}f}"
+    # Şimdi bu yuvarlanmış değeri normalize ederek ve stringe dönüştürerek gönder.
+    # normalize() gereksiz sondaki sıfırları kaldırır. Örneğin Decimal('1.2300').normalize() -> Decimal('1.23').
+    # Bu genellikle borsaların istediği formattır.
+    return str(rounded_d_value_by_step.normalize())
 
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
