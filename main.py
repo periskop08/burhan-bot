@@ -88,24 +88,22 @@ def round_quantity_to_exchange_precision(value, precision_step):
     if precision_step <= 0:
         return str(float(value))
 
-    s_precision_step = str(precision_step)
-    num_decimals_from_step = 0
-
-    if 'e' in s_precision_step: 
-        parts = s_precision_step.split('e')
-        if '.' in parts[0]:
-            num_decimals_from_step = len(parts[0].split('.')[1])
-        num_decimals_from_step += abs(int(parts[1])) 
-        
-    elif '.' in s_precision_step: 
-        num_decimals_from_step = len(s_precision_step.split('.')[1])
-    
     d_value = decimal.Decimal(str(value))
-    d_precision_step = decimal.Decimal(s_precision_step)
+    d_precision_step = decimal.Decimal(str(precision_step))
+
+    # Get the number of decimal places directly from the Decimal representation of precision_step
+    # The exponent is negative for decimal places (e.g., -6 for 0.000001)
+    # We need its absolute value for f-string formatting
+    # This is the most reliable way to determine precision from lot_size.
+    num_decimals = abs(d_precision_step.as_tuple().exponent)
     
+    # Quantize the value to the precision_step
+    # This ensures 'value' becomes a multiple of 'precision_step' and has the correct exact decimal places.
     rounded_d_value = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    return f"{rounded_d_value:.{num_decimals_from_step}f}"
+    # Format the rounded value to the exact number of decimal places required by the precision_step
+    # No .normalize() here to ensure trailing zeros are kept if needed by exchange.
+    return f"{rounded_d_value:.{num_decimals}f}"
 
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
@@ -244,23 +242,7 @@ def webhook():
         calculated_quantity_float = sabitMiktar_usd / entry_rounded
         
         # Miktarı lot_size'ın katı olacak şekilde yuvarla ve string'e dönüştür
-        d_calculated_quantity = decimal.Decimal(str(calculated_quantity_float))
-        d_lot_size = decimal.Decimal(str(lot_size))
-        
-        rounded_quantity_decimal = (d_calculated_quantity / d_lot_size).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_lot_size
-        
-        # Ondalık basamak sayısını belirle (lot_size'dan al)
-        s_lot_size = str(lot_size)
-        num_decimals_for_qty = 0
-        if 'e' in s_lot_size:
-            parts = s_lot_size.split('e')
-            if '.' in parts[0]:
-                num_decimals_for_qty = len(parts[0].split('.')[1])
-            num_decimals_for_qty += abs(int(parts[1]))
-        elif '.' in s_lot_size:
-            num_decimals_for_qty = len(s_lot_size.split('.')[1])
-        
-        quantity_str_for_bybit = f"{rounded_quantity_decimal:.{num_decimals_for_qty}f}"
+        quantity_str_for_bybit = round_quantity_to_exchange_precision(calculated_quantity_float, lot_size)
         
         # Debug mesajları
         send_telegram_message_to_queue(f"DEBUG: Hedef Pozisyon Değeri ({sabitMiktar_usd}$), Giriş Fiyatı ({entry_rounded}). Ham hesaplanan miktar: {calculated_quantity_float:.8f}. Bybit'e giden son miktar (string): {quantity_str_for_bybit}")
