@@ -97,13 +97,20 @@ def round_quantity_to_exchange_precision(value, precision_step):
     # This is the most reliable way to determine precision from lot_size.
     num_decimals = abs(d_precision_step.as_tuple().exponent)
     
-    # Quantize the value to the precision_step
-    # This ensures 'value' becomes a multiple of 'precision_step' and has the correct exact decimal places.
-    rounded_d_value = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
+    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını sınırla ===
+    # Bybit'in bazı paritelerde lot_size'dan daha az ondalık basamak bekleyebileceği durumlar için
+    # Eğer num_decimals 6'dan büyükse, onu 6'ya sınırlayalım.
+    # 0000USDT gibi çok düşük fiyatlı paritelerde 6-8 basamak yeterli olabilir.
+    # Bu değeri ihtiyaca göre ayarlayabiliriz.
+    safe_num_decimals = min(num_decimals, 6) # Burası 6 olarak sınırlandı, 8 yerine.
     
-    # Format the rounded value to the exact number of decimal places required by the precision_step
-    # No .normalize() here to ensure trailing zeros are kept if needed by exchange.
-    return f"{rounded_d_value:.{num_decimals}f}"
+    # Quantize the value to the precision_step (ensure it's a multiple of lot_size)
+    rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
+    
+    # Şimdi bu yuvarlanmış değeri, safe_num_decimals kadar ondalık basamakla stringe dönüştür
+    # F-string ile formatlarken num_decimals yerine safe_num_decimals kullanacağız.
+    # .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir.
+    return f"{rounded_d_value_by_step:.{safe_num_decimals}f}"
 
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
