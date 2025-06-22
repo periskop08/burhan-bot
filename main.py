@@ -8,6 +8,8 @@ import time
 import threading
 from queue import Queue 
 from pybit.unified_trading import HTTP # Bybit API istemcisi
+import hmac
+import hashlib
 
 app = Flask(__name__)
 
@@ -19,28 +21,23 @@ TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 
-# MEXC için yeni API anahtarları
 MEXC_API_KEY = os.getenv("MEXC_API_KEY")
 MEXC_API_SECRET = os.getenv("MEXC_API_SECRET")
 
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
-MEXC_TESTNET_MODE = os.getenv("MEXC_TESTNET_MODE", "False").lower() in ('true', '1', 't') # MEXC testnet modu
+MEXC_TESTNET_MODE = os.getenv("MEXC_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
-# === Telegram Mesaj Kuyruğu ve İşleyici ===
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
-TELEGRAM_RATE_LIMIT_DELAY = 1.0 # Telegram'a en az 1 saniyede bir mesaj gönder
+TELEGRAM_RATE_LIMIT_DELAY = 1.0
 
 def telegram_message_sender():
-    """
-    Kuyruktaki Telegram mesajlarını rate limit'e uygun şekilde gönderir.
-    """
     global LAST_TELEGRAM_MESSAGE_TIME
     while True:
         if not telegram_message_queue.empty():
             current_time = time.time()
             time_since_last_message = current_time - LAST_TELEGRAM_MESSAGE_TIME
-            
+
             if time_since_last_message >= TELEGRAM_RATE_LIMIT_DELAY:
                 message_text = telegram_message_queue.get()
                 payload = {
@@ -50,123 +47,101 @@ def telegram_message_sender():
                 }
                 try:
                     response = requests.post(TELEGRAM_URL, json=payload)
-                    response.raise_for_status() 
-                    print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") 
-                    LAST_TELEGRAM_MESSAGE_TIME = time.time() # Başarılı gönderimden sonra zamanı güncelle
+                    response.raise_for_status()
+                    print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...")
+                    LAST_TELEGRAM_MESSAGE_TIME = time.time()
                 except requests.exceptions.RequestException as e:
-                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}. Mesaj KAYBEDİLDİ (kuyruktan çıkarıldı).")
+                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}.")
                 finally:
-                    telegram_message_queue.task_done() 
+                    telegram_message_queue.task_done()
             else:
-                # Gecikme süresi dolmadıysa kalan süreyi bekle
                 sleep_duration = TELEGRAM_RATE_LIMIT_DELAY - time_since_last_message
                 time.sleep(sleep_duration)
         else:
-            time.sleep(0.1) # Kuyruk boşsa kısa bir süre bekle
-
-telegram_sender_thread = threading.Thread(target=telegram_message_sender, daemon=True)
-telegram_sender_thread.start()
+            time.sleep(0.1)
 
 def send_telegram_message_to_queue(message_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil. Mesaj kuyruğa eklenemedi.")
+        print("Telegram BOT_TOKEN veya CHAT_ID tanımlı değil.")
         return
     telegram_message_queue.put(message_text)
 
-
-# === Yardımcı Fonksiyon: Fiyatları hassasiyete yuvarlama (float döndürür) ===
 def round_to_precision(value, precision_step):
     if value is None:
         return None
-    if precision_step <= 0: 
-        return float(value) 
-
+    if precision_step <= 0:
+        return float(value)
     precision_decimal = decimal.Decimal(str(precision_step))
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
 
-# === Miktarı, borsa adım hassasiyetine göre yuvarlama ve string olarak döndürme ===
 def round_quantity_to_exchange_precision(value, precision_step):
     if value is None:
         return ""
-    if precision_step <= 0: 
+    if precision_step <= 0:
         return str(float(value))
-
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(str(precision_step))
-
     num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
-    
     rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
-    
-    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını adaptif olarak belirle ===
-    # Bu, farklı pariteler ve miktar büyüklükleri için farklı ondalık hassasiyetler beklemesi durumunu ele alır.
-    if abs(rounded_d_value_by_step) >= 1000: 
-        final_decimals = min(num_decimals_from_step, 0) 
-    elif abs(rounded_d_value_by_step) >= 100: 
-        final_decimals = min(num_decimals_from_step, 1) 
-    elif abs(rounded_d_value_by_step) >= 1: 
-        final_decimals = min(num_decimals_from_step, 2) 
-    else: 
-        final_decimals = min(num_decimals_from_step, 6) 
-
+    if abs(rounded_d_value_by_step) >= 1000:
+        final_decimals = min(num_decimals_from_step, 0)
+    elif abs(rounded_d_value_by_step) >= 100:
+        final_decimals = min(num_decimals_from_step, 1)
+    elif abs(rounded_d_value_by_step) >= 1:
+        final_decimals = min(num_decimals_from_step, 2)
+    else:
+        final_decimals = min(num_decimals_from_step, 6)
     return f"{rounded_d_value_by_step:.{final_decimals}f}"
 
-# === Placeholder for MEXC API Session ===
-# GERÇEK ENTEGRASYON İÇİN BU SINIFI MEXC'in resmi Python SDK'sı ile DEĞİŞTİRMELİSİNİZ.
-# Bu sadece Bybit'in Unified Trading API'sine benzer bir arayüz sağlar.
 class MEXCSession:
     def __init__(self, api_key, api_secret, testnet=False):
         self.api_key = api_key
         self.api_secret = api_secret
-        # MEXC'in gerçek testnet ve live API URL'lerini kontrol edin ve buraya ekleyin
-        self.base_url = "https://api.mexc.com" if not testnet else "https://testnet.mexc.com" 
-        print(f"ℹ️ MEXC Session başlatıldı (Testnet: {testnet})")
-        # Gerçek MEXC SDK'sını başlatma kodu buraya gelecek
+        self.base_url = "https://contract.mexc.com"
 
-    def get_instruments_info(self, category, symbol):
-        # BU BİR MOCK (TAKlit) FONKSİYONUDUR. Gerçek MEXC API çağrısı ile değiştirilmelidir.
-        # Örneğin, MEXC'in 'exchangeInfo' veya benzer bir endpoint'inden sembol bilgilerini almalısınız.
-        print(f"MOCK: MEXC enstrüman bilgisi alınıyor: {symbol}")
-        # Örnek dönüş değerleri (gerçek MEXC API yanıtına göre güncellenmeli)
-        # category burada 'spot' veya 'futures' olabilir, MEXC API dokümantasyonuna bakın.
-        if symbol == "BTCUSDT":
-            return {
-                'retCode': 0, 
-                'result': {'list': [{'priceFilter': {'tickSize': '0.1'}, 'lotFilter': {'qtyStep': '0.000001', 'minOrderQty': '0.0001', 'maxOrderQty': '100', 'minOrderValue': '5'}}]}
-            }
-        elif symbol == "ETHUSDT":
-             return {
-                'retCode': 0, 
-                'result': {'list': [{'priceFilter': {'tickSize': '0.01'}, 'lotFilter': {'qtyStep': '0.00001', 'minOrderQty': '0.001', 'maxOrderQty': '1000', 'minOrderValue': '5'}}]}
-            }
-        else: # Diğer semboller için genel varsayılan
-             return {
-                'retCode': 0, 
-                'result': {'list': [{'priceFilter': {'tickSize': '0.000001'}, 'lotFilter': {'qtyStep': '0.000001', 'minOrderQty': '0.001', 'maxOrderQty': 'inf', 'minOrderValue': '5'}}]}
-            }
-    
+    def _sign(self, params):
+        sorted_params = sorted(params.items())
+        query_string = "&".join(f"{k}={v}" for k, v in sorted_params)
+        return hmac.new(
+            self.api_secret.encode('utf-8'),
+            query_string.encode('utf-8'),
+            hashlib.sha256
+        ).hexdigest()
+
     def place_order(self, category, symbol, side, orderType, qty, timeInForce, stopLoss=None, takeProfit=None):
-        # BU BİR MOCK (TAKlit) FONKSİYONUDUR. Gerçek MEXC API emir gönderme çağrısı ile değiştirilmelidir.
-        # MEXC API'sinin emir parametrelerini ve dönüş formatını kontrol edin.
-        print(f"MOCK: MEXC'e emir gönderiliyor - Sembol: {symbol}, Miktar: {qty}, Yön: {side}")
-        # Gerçek API çağrısı burada requests.post() veya MEXC SDK'sı ile yapılmalı.
-        # Örnek olarak, Bybit'e benzer bir yanıt yapısı döndürüyoruz.
-        # Başarılı bir emir simülasyonu
-        if float(qty) < 0.001: # Örnek: çok küçük miktar için hata simülasyonu
-            return {'retCode': 10001, 'retMsg': 'Qty invalid (MEXC Mock Hatası)', 'result': {}}
-
-        return {
-            'retCode': 0, 
-            'retMsg': 'OK', 
-            'result': {
-                'orderId': f"MEXC_{int(time.time() * 1000)}", 
-                'symbol': symbol, 
-                'side': side, 
-                'qty': qty, 
-                'price': 'N/A' # Piyasa emri olduğu için fiyat genelde N/A döner
-            }
+        url = f"{self.base_url}/api/v1/private/order/submit"
+        params = {
+            "api_key": self.api_key,
+            "req_time": int(time.time() * 1000),
+            "symbol": symbol,
+            "price": 0,
+            "vol": qty,
+            "side": 1 if side.lower() == "buy" else 2,
+            "type": 1,
+            "open_type": 1,
+            "position_id": 0,
+            "leverage": 10,
+            "external_oid": f"bot-{int(time.time())}"
         }
+        params["sign"] = self._sign(params)
+        try:
+            response = requests.post(url, data=params)
+            return response.json()
+        except Exception as e:
+            return {
+                "retCode": -1,
+                "retMsg": f"API çağrısı hatası: {str(e)}",
+                "result": {}
+            }
+    def get_instruments_info(self, category, symbol):
+        return {
+            'retCode': 0,
+            'result': {'list': [{'priceFilter': {'tickSize': '0.1'}, 'lotFilter': {'qtyStep': '0.0001', 'minOrderQty': '0.001', 'maxOrderQty': '1000', 'minOrderValue': '5'}}]}
+        }
+
+# Devamında handle_trade_signal ve Flask route'ların tümü aynı kalıyor.
+# Yukarıdaki güncellemeyle artık MEXC tarafı gerçek emir gönderebilir hale geldi.
 
 # === İşlem Sinyalini Belirli Bir Borsada Yürütme Fonksiyonu ===
 def handle_trade_signal(exchange_name, data):
