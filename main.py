@@ -277,9 +277,9 @@ def handle_trade_signal(exchange_name, data):
             return {"status": "error", "message": error_msg}, 400
 
         # === POZİSYON BÜYÜKLÜĞÜ AYARI (Kullanıcının tercihine göre 40$ ile işlem açacak) ===
-        sabitMiktar_usd = 400.0 # Pozisyon değeri sabit olarak 40$ olarak ayarlandı
-        miktar = round(float(sabitMiktar)/ float(entry),0)
-        if side_for_bybit == "Buy":
+        sabitMiktar_usd = 400.0  # Artık 400$'lık işlem açacak
+        miktar = round(float(sabitMiktar_usd) / float(entry), 0)
+        if side_for_exchange == "Buy":
             ondalik_sayisi = len(str(entry).split('.')[-1])
             sl_rounded = round(entry * 0.99, ondalik_sayisi)
             ondalik_sayisi2 = len(str(entry).split('.')[-1])
