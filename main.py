@@ -91,19 +91,30 @@ def round_quantity_to_exchange_precision(value, precision_step):
     d_precision_step = decimal.Decimal(str(precision_step))
 
     # precision_step'ten ondalık basamak sayısını al
-    # Exponent negatif olduğu için abs() kullanıyoruz: Decimal('0.000001').as_tuple().exponent == -6
     num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
     
     # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
     rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    # Şimdi bu yuvarlanmış Decimal değerini, daha kontrollü bir hassasiyetle stringe dönüştür.
-    # Bybit'in bazı paritelerde yüksek ondalık basamakları kabul etmediği durumlar için
-    # lot_size'dan gelen ondalık basamak sayısı veya maksimum 6 ondalık basamaktan hangisi daha azsa onu kullan.
-    # Genellikle 4 veya 6 ondalık basamak miktarlar için yeterli olmalıdır.
-    final_decimals = min(num_decimals_from_step, 6) # Maksimum 6 ondalık basamak olarak ayarlandı
+    # === KRİTİK DEĞİŞİKLİK BURADA: Maksimum ondalık basamak sayısını adaptif olarak belirle ===
+    # Bu, Bybit'in farklı pariteler ve miktar büyüklükleri için farklı ondalık hassasiyetler beklemesi durumunu ele alır.
     
-    # F-string ile formatlarken belirlenen ondalık basamak sayısını kullan.
+    # Miktarın tam sayı kısmı ne kadar büyükse, o kadar az ondalık basamak kullanma eğilimi göster.
+    # Bu bir heuristic'tir ve Bybit'in gizli kurallarına uyum sağlamaya çalışır.
+    
+    # Örneğin, 1364.256480 gibi bir değer için Bybit tam sayı veya 2 ondalık bekleyebilir.
+    # 0.000123 gibi bir değer için 6 ondalık bekleyebilir.
+
+    if abs(rounded_d_value_by_step) >= 1000: # Örneğin, 1000 adetten büyükse
+        final_decimals = min(num_decimals_from_step, 0) # Tam sayıya yuvarla
+    elif abs(rounded_d_value_by_step) >= 100: # Örneğin, 100-999 adet arası
+        final_decimals = min(num_decimals_from_step, 1) # Maksimum 1 ondalık basamak
+    elif abs(rounded_d_value_by_step) >= 1: # Örneğin, 1-99 adet arası
+        final_decimals = min(num_decimals_from_step, 2) # Maksimum 2 ondalık basamak
+    else: # Miktar 1'den küçükse (0.x gibi)
+        final_decimals = min(num_decimals_from_step, 6) # lot_size'dan gelen veya maksimum 6 ondalık basamak
+
+    # Son olarak, yuvarlanmış değeri belirlenen ondalık basamak sayısıyla stringe dönüştür.
     return f"{rounded_d_value_by_step:.{final_decimals}f}"
 
 
@@ -362,7 +373,6 @@ def webhook():
         error_message_full = f"🔥 KRİTİK GENEL HATA webhook işlenirken: {str(e)}\n{traceback.format_exc()}"
         print(error_message_full)
         # Eğer order değişkeni burada tanımlı değilse, sadece hata mesajını gönder.
-        # Bu, NameError'ı engellemek içindi.
         if 'order' not in locals() or order is None:
             send_telegram_message_to_queue(f"<b>🚨 KRİTİK BOT HATASI! (order tanımsız)</b>\n<pre>{error_message_full}</pre>")
         else:
