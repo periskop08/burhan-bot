@@ -24,7 +24,7 @@ BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true'
 # === Telegram Mesaj Kuyruğu ve İşleyici ===
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
-TELEGRAM_RATE_LIMIT_DELAY = 1.0 # Telegram'a en az 1 saniyede bir mesaj gönder (kullanıcının önceki çalışan sistemine göre)
+TELEGRAM_RATE_LIMIT_DELAY = 1.0 # Telegram'a en az 1 saniyede bir mesaj gönder
 
 def telegram_message_sender():
     """
@@ -34,9 +34,7 @@ def telegram_message_sender():
     while True:
         if not telegram_message_queue.empty():
             current_time = time.time()
-            time_since_last_message = current_time - LAST_TELEGRAM_MESSAGE_TIME
-            
-            if time_since_last_message >= TELEGRAM_RATE_LIMIT_DELAY:
+            if (current_time - LAST_TELEGRAM_MESSAGE_TIME) >= TELEGRAM_RATE_LIMIT_DELAY:
                 message_text = telegram_message_queue.get()
                 payload = {
                     "chat_id": TELEGRAM_CHAT_ID,
@@ -47,27 +45,24 @@ def telegram_message_sender():
                     response = requests.post(TELEGRAM_URL, json=payload)
                     response.raise_for_status() 
                     print(f"📤 Telegram'a mesaj gönderildi: {message_text[:100]}...") 
-                    LAST_TELEGRAM_MESSAGE_TIME = time.time() # Başarılı gönderimden sonra zamanı güncelle
+                    LAST_TELEGRAM_MESSAGE_TIME = current_time
                 except requests.exceptions.RequestException as e:
-                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}. Mesaj KAYBEDİLDİ (kuyruktan çıkarıldı).")
+                    print(f"🔥 Telegram mesajı gönderilirken hata oluştu: {e}. Mesaj KAYBEDİLDİ (tekrar kuyruğa eklenmiyor).")
                 finally:
                     telegram_message_queue.task_done() 
             else:
-                # Gecikme süresi dolmadıysa kalan süreyi bekle
-                sleep_duration = TELEGRAM_RATE_LIMIT_DELAY - time_since_last_message
-                time.sleep(sleep_duration)
+                time.sleep(TELEGRAM_RATE_LIMIT_DELAY - (current_time - LAST_TELEGRAM_MESSAGE_TIME)) 
         else:
-            time.sleep(0.1) # Kuyruk boşsa kısa bir süre bekle
+            time.sleep(0.1) 
 
 telegram_sender_thread = threading.Thread(target=telegram_message_sender, daemon=True)
 telegram_sender_thread.start()
 
 def send_telegram_message_to_queue(message_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil. Mesaj kuyruğa eklenemedi.")
+        print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil.")
         return
     telegram_message_queue.put(message_text)
-
 
 # === Yardımcı Fonksiyon: Fiyatları hassasiyete yuvarlama (float döndürür) ===
 def round_to_precision(value, precision_step):
@@ -81,68 +76,53 @@ def round_to_precision(value, precision_step):
     return float(rounded_value)
 
 # === Miktarı, borsa adım hassasiyetine göre yuvarlama ve string olarak döndürme ===
-def round_quantity_to_exchange_precision(value, precision_step):
+def round_to_precision_str(value, precision_step):
     if value is None:
         return ""
-    if precision_step <= 0: # Eğer precision_step 0 veya negatifse, direkt stringe çevir
+    if precision_step <= 0:
         return str(float(value))
 
-    d_value = decimal.Decimal(str(value))
-    d_precision_step = decimal.Decimal(str(precision_step))
+    s_precision_step = str(precision_step)
+    num_decimals_from_step = 0
 
-    # precision_step'ten ondalık basamak sayısını al
-    # Exponent negatif olduğu için abs() kullanıyoruz: Decimal('0.000001').as_tuple().exponent == -6
-    num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
+    if 'e' in s_precision_step: 
+        parts = s_precision_step.split('e')
+        if '.' in parts[0]:
+            num_decimals_from_step = len(parts[0].split('.')[1])
+        num_decimals_from_step += abs(int(parts[1])) # Bilimsel notasyondaki üssü de dikkate al
+        
+    elif '.' in s_precision_step: 
+        num_decimals_from_step = len(s_precision_step.split('.')[1])
+    
+    # Decimal kütüphanesi ile yüksek hassasiyetle yuvarlama
+    d_value = decimal.Decimal(str(value))
+    d_precision_step = decimal.Decimal(s_precision_step)
     
     # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
-    # Bu, Decimal kütüphanesinin ana yuvarlama mantığıdır.
-    rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
+    # Yani 10.5'i 0.5 adımla yuvarlarsak 10.5 olur, 10.6'yı 11.0'a yuvarlar
+    # Bu, borsa hassasiyetine en yakın yuvarlamayı sağlar.
+    rounded_d_value = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    # Son olarak, yuvarlanmış değeri belirlenen ondalık basamak sayısıyla stringe dönüştür.
-    # .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir ve Bybit bunu bekliyor olabilir.
-    # `num_decimals_from_step` değeri ne olursa olsun, f-string ile tam bu kadar basamağı göstereceğiz.
-    return f"{rounded_d_value_by_step:.{num_decimals_from_step}f}"
-
+    # Yuvarlanmış Decimal değerini, hesaplanan ondalık basamak sayısıyla stringe dönüştür.
+    # Burada .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir.
+    return f"{rounded_d_value:.{num_decimals_from_step}f}"
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
-    # --- JSON Ayrıştırma ve Hata Yakalama ---
-    data = None
+    data = request.get_json()
+    print(f"📩 Webhook verisi alındı: {data}")
+
     try:
-        # force=True: Content-Type headerını yok sayar, yine de JSON olarak ayrıştırmaya çalışır.
-        # silent=True: Hata durumunda None döndürür, exception fırlatmaz.
-        data = request.get_json(force=True, silent=True) 
-        
-        if data is None: 
-            raw_data = request.get_data(as_text=True)
-            headers = dict(request.headers)
-            error_msg = f"❗ Webhook verisi JSON olarak ayrıştırılamadı. Muhtemelen geçersiz JSON formatı.\n" \
-                        f"Headers: <pre>{json.dumps(headers, indent=2)}</pre>\n" \
-                        f"Raw Data (ilk 500 karakter): <pre>{raw_data[:500]}</pre>" 
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": "JSON ayrıştırma hatası veya geçersiz veri"}), 400
-        
-        print(f"📩 Webhook verisi alındı: {data}")
         signal_message_for_telegram = f"<b>🔔 TradingView Ham Sinyali:</b>\n<pre>{json.dumps(data, indent=2)}</pre>"
         send_telegram_message_to_queue(signal_message_for_telegram)
-
-        # --- Sinyal Verilerini Çekme ---
+        
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
         sl = data.get("sl") 
         tp = data.get("tp") 
 
-        # Giriş verilerini kontrol et (None kontrolü)
-        if not all([symbol, side, entry, sl, tp]):
-            error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
-        # Side (işlem yönü) kontrolü
         side_for_bybit = ""
         if side and side.lower() == "buy":
             side_for_bybit = "Buy"
@@ -158,22 +138,31 @@ def webhook():
             send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Sembol temizliği
-        if ":" in symbol:
-            symbol = symbol.split(":")[-1]
-            print(f"Sembol TradingView prefix'inden temizlendi: {symbol}")
-            send_telegram_message_to_queue(f"ℹ️ Sembol prefix temizlendi: <b>{symbol}</b>")
-        
-        if symbol.endswith(".P"):
-            symbol = symbol[:-2] 
-            print(f"Sembol '.P' ekinden temizlendi: {symbol}")
-            send_telegram_message_to_queue(f"ℹ️ Sembol '.P' eki temizlendi: <b>{symbol}</b>")
-        
-        symbol = symbol.upper()
-        send_telegram_message_to_queue(f"ℹ️ Nihai işlem sembolü: <b>{symbol}</b>")
-        
+        if symbol: 
+            if ":" in symbol:
+                symbol = symbol.split(":")[-1]
+                print(f"Sembol TradingView prefix'inden temizlendi: {symbol}")
+                send_telegram_message_to_queue(f"ℹ️ Sembol prefix temizlendi: <b>{symbol}</b>")
+            
+            if symbol.endswith(".P"):
+                symbol = symbol[:-2] 
+                print(f"Sembol '.P' ekinden temizlendi: {symbol}")
+                send_telegram_message_to_queue(f"ℹ️ Sembol '.P' eki temizlendi: <b>{symbol}</b>")
+            
+            symbol = symbol.upper()
+            send_telegram_message_to_queue(f"ℹ️ Nihai işlem sembolü: <b>{symbol}</b>")
+        else:
+            error_msg = "❗ Sembol bilgisi eksik!"
+            print(error_msg)
+            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
+            return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Fiyat verilerini float'a çevirme
+        if not all([symbol, side, entry, sl, tp]):
+            error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
+            print(error_msg)
+            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
+            return jsonify({"status": "error", "message": "Eksik sinyal verisi"}), 400
+
         try:
             entry = float(entry)
             sl = float(sl)
@@ -184,10 +173,12 @@ def webhook():
             send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": "Geçersiz fiyat formatı"}), 400
 
-        # Bybit API oturumu
+        # === RİSK YÖNETİMİ AYARI BURADA ===
+        risk_dolar = 5.0 
+        max_notional_value_per_trade_usd = 100.0 
+
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
 
-        # Bybit'ten enstrüman bilgilerini al
         tick_size = 0.000001 
         lot_size = 0.000001  
         min_order_qty = 0.0  
@@ -241,24 +232,21 @@ def webhook():
             send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # === POZİSYON BÜYÜKLÜĞÜ AYARI (Kullanıcının tercihine göre 40$ ile işlem açacak) ===
-        sabitMiktar_usd = 40.0 # Pozisyon değeri sabit olarak 40$ olarak ayarlandı
-
-        if entry_rounded == 0:
-            error_msg = "❗ Giriş fiyatı sıfır geldi. Pozisyon miktarı hesaplanamıyor."
-            print(error_msg)
-            send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-            return jsonify({"status": "error", "message": error_msg}), 400
-
-        # Adet miktarını sabit dolar değerine göre hesapla
-        calculated_quantity_float = sabitMiktar_usd / entry_rounded
+        # ADIM 1: Risk bazlı miktarı hesapla
+        quantity_from_risk = risk_dolar / abs(entry_rounded - sl_rounded) # Yuvarlanmış değerlerle hesapla
         
-        # Miktarı lot_size'ın katı olacak şekilde yuvarla ve string'e dönüştür
-        quantity_str_for_bybit = round_quantity_to_exchange_precision(calculated_quantity_float, lot_size)
-        
-        # Debug mesajları
-        send_telegram_message_to_queue(f"DEBUG: Hedef Pozisyon Değeri ({sabitMiktar_usd}$), Giriş Fiyatı ({entry_rounded}). Ham hesaplanan miktar: {calculated_quantity_float:.8f}. Bybit'e giden son miktar (string): {quantity_str_for_bybit}")
+        # ADIM 2: Maksimum notional değer bazlı miktarı hesapla
+        quantity_from_notional_limit = max_notional_value_per_trade_usd / entry_rounded if entry_rounded != 0 else float('inf')
 
+        # ADIM 3: İki hesaplamadan en küçüğünü al
+        final_calculated_quantity_pre_round = min(quantity_from_risk, quantity_from_notional_limit)
+
+        send_telegram_message_to_queue(f"DEBUG: Risk bazlı miktar: {quantity_from_risk:.8f}, Hedef değer bazlı miktar: {quantity_from_notional_limit:.8f}. Seçilen Ham Miktar: {final_calculated_quantity_pre_round:.8f}")
+        send_telegram_message_to_queue(f"DEBUG: Yuvarlanmış Entry: {entry_rounded}, SL: {sl_rounded}, TP: {tp_rounded}")
+
+        # Miktarı güvenli ondalık hassasiyete yuvarla ve string olarak al. 
+        quantity_str_for_bybit = round_to_precision_str(final_calculated_quantity_pre_round, lot_size)
+        
         # Limit kontrollerini yapmak için string'i tekrar float'a çeviriyoruz
         quantity_float_for_checks = float(quantity_str_for_bybit)
 
@@ -281,7 +269,7 @@ def webhook():
             send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # Gizli minimum işlem değerini kontrol etmek için 
+        # Gizli minimum işlem değerini kontrol etmek için (Bybit bazen 0.0 döndürse bile gerçekte bir limiti vardır)
         implied_min_order_value = max(10.0, min_order_value) 
 
         order_value = quantity_float_for_checks * entry_rounded
@@ -294,7 +282,7 @@ def webhook():
         actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry_rounded - sl_rounded))
         
         trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ (Hedef Poz. Değeri: ${sabitMiktar_usd:.2f}):</b>\n" 
+            f"<b>📢 YENİ EMİR SİPARİŞİ (Hedef Risk: ${risk_dolar:.2f}, Maks. Poz. Değeri: ${max_notional_value_per_trade_usd:.2f}):</b>\n" 
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side_for_bybit.upper()}\n" 
             f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n" 
@@ -304,18 +292,20 @@ def webhook():
             f"<b>Hesaplanan Fiili Risk (SL vurulursa):</b> ${actual_risk_if_sl_hit:.2f}" 
         )
         send_telegram_message_to_queue(trade_summary)
+        send_telegram_message_to_queue(f"DEBUG: Bybit'e gönderilen son miktar (string): {quantity_str_for_bybit}")
         
-        # Bybit'e emir gönder
-        order = session.place_order(
-            category="linear", 
-            symbol=symbol,
-            side=side_for_bybit, 
-            orderType="Market", 
-            qty=quantity_str_for_bybit,  # Bybit'e string hali gönderildi
-            timeInForce="GoodTillCancel", 
-            stopLoss=str(sl_rounded),   
-            takeProfit=str(tp_rounded)  
-        )
+        sabitMiktar = 400
+        miktar = round(float(sabitMiktar)/ float(entry),0)
+        if side_for_bybit == "Buy":
+            ondalik_sayisi = len(str(entry).split('.')[-1])
+            sl_rounded = round(entry * 0.99, ondalik_sayisi)
+            ondalik_sayisi2 = len(str(entry).split('.')[-1])
+            tp_rounded = round(entry * 1.02, ondalik_sayisi2)
+        else:
+            ondalik_sayisi = len(str(entry).split('.')[-1])
+            sl_rounded = round(entry * 1.01, ondalik_sayisi)
+            ondalik_sayisi2 = len(str(entry).split('.')[-1])
+            tp_rounded = round(entry * 0.98, ondalik_sayisi2)
 
         print(f"✅ Emir gönderildi: {order}")
 
@@ -330,20 +320,19 @@ def webhook():
                 f"<b>Fiyat:</b> {order_info.get('price', 'N/A')}\n"
                 f"<b>Durum:</b> {order.get('retMsg', 'Başarılı')}"
             )
-            send_telegram_message_to_queue(success_message) 
+            send_telegram_message_to_queue(success_message)
             return jsonify({"status": "ok", "order": order})
         else:
             error_response_msg = order.get('retMsg', 'Bilinmeyen Bybit hatası.')
             full_error_details = json.dumps(order, indent=2) 
             error_message_telegram = f"<b>🚨 Bybit Emir Hatası:</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity_float_for_checks}\n<pre>{full_error_details}</pre>"
-            send_telegram_message_to_queue(error_message_telegram) 
+            send_telegram_message_to_queue(error_message_telegram)
             return jsonify({"status": "error", "message": error_response_msg}), 500
 
     except Exception as e:
-        # Genel hata yakalama, traceback ile detaylı bilgi logla
-        error_message_full = f"🔥 KRİTİK GENEL HATA webhook işlenirken: {str(e)}\n{traceback.format_exc()}"
+        error_message_full = f"🔥 Genel HATA webhook işlenirken: {str(e)}\n{traceback.format_exc()}"
         print(error_message_full)
-        send_telegram_message_to_queue(f"<b>🚨 KRİTİK BOT HATASI!</b>\n<pre>{error_message_full}</pre>") 
+        send_telegram_message_to_queue(f"<b>🚨 KRİTİK BOT HATASI!</b>\n<pre>{error_message_full}</pre>")
         return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route("/", methods=["GET"])
@@ -352,3 +341,5 @@ def home():
 
 if __name__ == "__main__":
     app.run(debug=True, port=os.getenv("PORT", 5000))
+
+
