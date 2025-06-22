@@ -24,7 +24,7 @@ BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true'
 # === Telegram Mesaj Kuyruğu ve İşleyici ===
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
-TELEGRAM_RATE_LIMIT_DELAY = 2.0 # Telegram'a en az 2 saniyede bir mesaj gönder (daha güvenli)
+TELEGRAM_RATE_LIMIT_DELAY = 1.0 # Telegram'a en az 1 saniyede bir mesaj gönder (kullanıcının önceki çalışan sistemine göre)
 
 def telegram_message_sender():
     """
@@ -90,14 +90,18 @@ def round_quantity_to_exchange_precision(value, precision_step):
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(str(precision_step))
 
+    # precision_step'ten ondalık basamak sayısını al
+    # Exponent negatif olduğu için abs() kullanıyoruz: Decimal('0.000001').as_tuple().exponent == -6
+    num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
+    
     # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
     # Bu, Decimal kütüphanesinin ana yuvarlama mantığıdır.
     rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    # Şimdi bu yuvarlanmış değeri normalize ederek ve stringe dönüştürerek gönder.
-    # normalize() gereksiz sondaki sıfırları kaldırır. Örneğin Decimal('1.2300').normalize() -> Decimal('1.23').
-    # Bu genellikle borsaların istediği formattır.
-    return str(rounded_d_value_by_step.normalize())
+    # Son olarak, yuvarlanmış değeri belirlenen ondalık basamak sayısıyla stringe dönüştür.
+    # .normalize() kullanmıyoruz, çünkü borsalar sondaki sıfırları da isteyebilir ve Bybit bunu bekliyor olabilir.
+    # `num_decimals_from_step` değeri ne olursa olsun, f-string ile tam bu kadar basamağı göstereceğiz.
+    return f"{rounded_d_value_by_step:.{num_decimals_from_step}f}"
 
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
@@ -237,7 +241,7 @@ def webhook():
             send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
             return jsonify({"status": "error", "message": error_msg}), 400
 
-        # === POZİSYON BÜYÜKLÜĞÜ AYARI (Kullanıcının mevcut çalışan tercihine göre 40$ ile işlem açacak) ===
+        # === POZİSYON BÜYÜKLÜĞÜ AYARI (Kullanıcının tercihine göre 40$ ile işlem açacak) ===
         sabitMiktar_usd = 40.0 # Pozisyon değeri sabit olarak 40$ olarak ayarlandı
 
         if entry_rounded == 0:
