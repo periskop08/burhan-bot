@@ -269,7 +269,7 @@ def webhook():
             return jsonify({"status": "error", "message": error_msg}), 400
 
         # === POZİSYON BÜYÜKLÜĞÜ AYARI (Kullanıcının tercihine göre 40$ ile işlem açacak) ===
-        sabitMiktar_usd = 40.0 # Pozisyon değeri sabit olarak 40$ olarak ayarlandı
+        sabitMiktar_usd = 400.0 # Pozisyon değeri sabit olarak 40$ olarak ayarlandı
 
         if entry_rounded == 0:
             error_msg = "❗ Giriş fiyatı sıfır geldi. Pozisyon miktarı hesaplanamıyor."
