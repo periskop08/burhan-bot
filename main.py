@@ -8,7 +8,7 @@ import time
 import threading
 from queue import Queue 
 from pybit.unified_trading import HTTP # Bybit API istemcisi
-from mexc_api.mexc_futures import MEXCFutures # MEXC Futures API SDK'sını buradan import ediyoruz
+import ccxt # ccxt kütüphanesini import ediyoruz
 
 app = Flask(__name__)
 
@@ -25,10 +25,8 @@ MEXC_API_KEY = os.getenv("MEXC_API_KEY")
 MEXC_API_SECRET = os.getenv("MEXC_API_SECRET")
 
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
-# MEXC SDK'sı genellikle testnet parametresini içermez, ancak eğer kullanılıyorsa buradan kontrol edilebilir.
-# Şu anki mexc_api kütüphanesinde testnet desteği direkt Client başlatılırken yok gibi görünüyor.
-# Canlı API URL'ini varsayılan olarak kullanacaktır.
-# MEXC_TESTNET_MODE = os.getenv("MEXC_TESTNET_MODE", "False").lower() in ('true', '1', 't') 
+# ccxt için testnet modu:
+MEXC_TESTNET_MODE = os.getenv("MEXC_TESTNET_MODE", "False").lower() in ('true', '1', 't') 
 
 
 # === Telegram Mesaj Kuyruğu ve İşleyici ===
@@ -94,22 +92,16 @@ def round_to_precision(value, precision_step):
 def round_quantity_to_exchange_precision(value, precision_step):
     if value is None:
         return ""
-    if precision_step <= 0: # Eğer precision_step 0 veya negatifse, direkt stringe çevir
+    if precision_step <= 0: 
         return str(float(value))
 
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(str(precision_step))
 
-    # precision_step'ten ondalık basamak sayısını al
-    # Exponent negatif olduğu için abs() kullanıyoruz: Decimal('0.000001').as_tuple().exponent == -6
-    # Bu, lot_size'ın sağladığı kesin ondalık basamak sayısını bulur.
     num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
     
-    # Değeri tam olarak precision_step'in katı olacak şekilde yuvarla
     rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
     
-    # Son olarak, yuvarlanmış değeri belirlenen ondalık basamak sayısıyla stringe dönüştür.
-    # Bu, borsanın tam hassasiyet beklentisini karşılamalıdır.
     return f"{rounded_d_value_by_step:.{num_decimals_from_step}f}"
 
 
@@ -129,7 +121,7 @@ def handle_trade_signal(exchange_name, data):
         if not all([symbol, side, entry, sl, tp]):
             error_msg = f"❗ Eksik sinyal verisi! Symbol: {symbol}, Side: {side}, Entry: {entry}, SL: {sl}, TP: {tp}"
             print(error_msg)
-            send_telegram_message_to_queue(f"🚨 {exchange_name.upper()} Bot Hatası: {error_msg}")
+            send_telegram_message_to_queue(f"� {exchange_name.upper()} Bot Hatası: {error_msg}")
             return {"status": "error", "message": error_msg}, 400
 
         # Side (işlem yönü) kontrolü
@@ -145,7 +137,6 @@ def handle_trade_signal(exchange_name, data):
             return {"status": "error", "message": error_msg}, 400
         
         # Sembol temizliği (varsa prefix'i kaldır) - Zaten webhook içinde yapılıyor, burada ek kontrole gerek yok.
-        # Bu fonksiyon sadece temizlenmiş sembolle çalışmalı.
         symbol = symbol.upper() # Her ihtimale karşı büyük harfe çevir
         send_telegram_message_to_queue(f"ℹ️ {exchange_name.upper()} Nihai işlem sembolü: <b>{symbol}</b>")
 
@@ -175,11 +166,21 @@ def handle_trade_signal(exchange_name, data):
                 send_telegram_message_to_queue(error_msg)
                 return {"status": "error", "message": error_msg}, 400
             
-            # Gerçek MEXC Futures Client başlatma
-            # mexc_api.mexc_futures kütüphanesinin testnet desteği dokümantasyonunda belirtilmediği için
-            # doğrudan MEXCFutures() çağırıyoruz. Canlı API'ye bağlanacaktır.
-            exchange_session = MEXCFutures(api_key=MEXC_API_KEY, api_secret=MEXC_API_SECRET) 
-            print(f"ℹ️ MEXC Futures Session başlatıldı.")
+            # ccxt ile MEXC Futures başlatma
+            exchange_session = ccxt.mexc({
+                'apiKey': MEXC_API_KEY,
+                'secret': MEXC_API_SECRET,
+                'options': {
+                    'defaultType': 'future', # Vadeli işlemler için 'future' veya 'swap'
+                },
+                'enableRateLimit': True, # Oran limitlerini yönetmek için
+            })
+            if MEXC_TESTNET_MODE:
+                # ccxt testnet URL'i için özel ayar gerekebilir, MEXC dokümantasyonunu kontrol edin.
+                # Genellikle 'urls' içinde 'api', 'test' gibi alanlar bulunur.
+                # Örneğin: exchange_session.set_sandbox_mode(True)
+                pass 
+            print(f"ℹ️ MEXC Futures Session (ccxt) başlatıldı.")
 
         else:
             error_msg = f"❗ Tanımlanamayan borsa adı: {exchange_name}"
@@ -206,7 +207,7 @@ def handle_trade_signal(exchange_name, data):
                         tick_size = float(price_filter['tickSize'])
                     if 'qtyStep' in lot_filter:
                         lot_size = float(lot_filter['qtyStep'])
-                    elif 'minTradingQty' in lot_filter: # Bazı borsalar minTradingQty olarak dönebilir
+                    elif 'minTradingQty' in lot_filter: 
                         lot_size = float(lot_filter['minTradingQty'])
                     if 'minOrderQty' in lot_filter:
                         min_order_qty = float(lot_filter['minOrderQty'])
@@ -222,31 +223,24 @@ def handle_trade_signal(exchange_name, data):
                     send_telegram_message_to_queue(f"⚠️ {symbol} için Bybit hassasiyet bilgisi alınamadı. Varsayılanlar kullanılıyor.")
             
             elif exchange_name == "mexc":
-                # MEXC için enstrüman bilgisi alma (get_contract_detail)
-                # Bu çağrı tüm sözleşmeleri döndürebilir, bu yüzden sembole göre filtrelememiz gerekecek.
-                contract_details_response = exchange_session.get_contract_detail() 
+                # ccxt ile enstrüman bilgisi alma (load_markets çağrısı)
+                # Bu, sembollerin hassasiyetlerini, min/max miktarlarını vb. içerir.
+                markets = exchange_session.load_markets()
+                market_info = markets.get(symbol)
                 
-                if contract_details_response and contract_details_response.get('code') == 200:
-                    instrument_info_list = contract_details_response.get('data', [])
-                    instrument_info = next((item for item in instrument_info_list if item.get("symbol") == symbol), None) # 'symbol' anahtarını güvenli erişimle kontrol et
-                    
-                    if instrument_info:
-                        # MEXC'in priceScale ve volumeScale değerlerini float'a çevirme
-                        # priceScale: 4 -> 0.0001, volumeScale: 0 -> 1 (1e-0)
-                        tick_size = float("1e-" + str(instrument_info.get('priceScale', '6'))) 
-                        lot_size = float("1e-" + str(instrument_info.get('volumeScale', '0'))) 
-                        min_order_qty = float(instrument_info.get('minTradeNum', '0.0'))
-                        max_order_qty = float(instrument_info.get('maxTradeNum', 'inf'))
-                        min_order_value = float(instrument_info.get('minTradeAmount', '0.0')) # Minimum notional value
-                        
-                        print(f"MEXC {symbol} için API'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}, Min Order Qty: {min_order_qty}, Max Order Qty: {max_order_qty}, Min Order Value: {min_order_value}")
-                        send_telegram_message_to_queue(f"ℹ️ {symbol} için MEXC hassasiyetleri alındı:\nFiyat Adımı: <code>{tick_size}</code>\nMiktar Adımı: <code>{lot_size}</code>\nMin Emir Miktarı: <code>{min_order_qty}</code>\nMax Emir Miktarı: <code>{max_order_qty}</code>\nMin Emir Değeri: <code>{min_order_value} USDT</code>")
-                    else:
-                        print(f"Uyarı: {symbol} için MEXC hassasiyet bilgisi bulunamadı. Sözleşme listesi: {instrument_info_list}. Varsayılanlar kullanılıyor.")
-                        send_telegram_message_to_queue(f"⚠️ {symbol} için MEXC hassasiyet bilgisi alınamadı. Varsayılanlar kullanılıyor.")
+                if market_info:
+                    tick_size = market_info['precision']['price']
+                    # ccxt'de qtyStep genellikle 'amount' hassasiyetidir.
+                    lot_size = market_info['precision']['amount']
+                    min_order_qty = market_info['limits']['amount']['min']
+                    max_order_qty = market_info['limits']['amount']['max']
+                    min_order_value = market_info['limits']['cost']['min'] # Minimum notional value
+
+                    print(f"MEXC {symbol} için CCXT'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}, Min Order Qty: {min_order_qty}, Max Order Qty: {max_order_qty}, Min Order Value: {min_order_value}")
+                    send_telegram_message_to_queue(f"ℹ️ {symbol} için MEXC hassasiyetleri alındı (CCXT):\nFiyat Adımı: <code>{tick_size}</code>\nMiktar Adımı: <code>{lot_size}</code>\nMin Emir Miktarı: <code>{min_order_qty}</code>\nMax Emir Miktarı: <code>{max_order_qty}</code>\nMin Emir Değeri: <code>{min_order_value} USDT</code>")
                 else:
-                    print(f"Uyarı: MEXC tüm enstrüman bilgileri alınırken hata oluştu. API yanıtı: {contract_details_response}. Varsayılanlar kullanılıyor.")
-                    send_telegram_message_to_queue(f"⚠️ MEXC tüm enstrüman bilgileri alınamadı. Varsayılanlar kullanılıyor.")
+                    print(f"Uyarı: {symbol} için MEXC hassasiyet bilgisi (CCXT) bulunamadı. Varsayılanlar kullanılıyor. Market info: {market_info}")
+                    send_telegram_message_to_queue(f"⚠️ {symbol} için MEXC hassasiyet bilgisi (CCXT) alınamadı. Varsayılanlar kullanılıyor.")
 
         except Exception as api_e:
             error_msg_api = f"{exchange_name.upper()} sembol/hassasiyet bilgisi alınırken hata: {api_e}. Varsayılan hassasiyetler kullanılıyor.\nTraceback: {traceback.format_exc()}"
@@ -321,7 +315,7 @@ def handle_trade_signal(exchange_name, data):
         actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry_rounded - sl_rounded))
         
         trade_summary = (
-            f"<b>� YENİ EMİR SİPARİŞİ ({exchange_name.upper()}, Hedef Poz. Değeri: ${sabitMiktar_usd:.2f}):</b>\n" 
+            f"<b>📢 YENİ EMİR SİPARİŞİ ({exchange_name.upper()}, Hedef Poz. Değeri: ${sabitMiktar_usd:.2f}):</b>\n" 
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side_for_exchange.upper()}\n" 
             f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n" 
@@ -368,90 +362,108 @@ def handle_trade_signal(exchange_name, data):
                 return {"status": "error", "message": error_response_msg}, 500
 
         elif exchange_name == "mexc":
-            # MEXC için emir gönderme
-            # Side (Buy/Sell) to MEXC trade_type (1=open long, 3=open short)
-            mexc_trade_type = 1 if side_for_exchange == "Buy" else 3
+            # ccxt ile emir gönderme
+            # ccxt trade side'ları: 'buy' veya 'sell'
+            ccxt_side = "buy" if side_for_exchange == "Buy" else "sell"
             
-            # MEXC SDK'sının place_order metoduna göre parametreleri kontrol edin
-            # Piyasa emri için price değeri 0 veya boş bırakılabilir.
-            # Leveraj ve open_type değerlerini ihtiyaca göre ayarlayın!
+            # MEXC için varsayılan kaldıraç ve pozisyon modu (ihtiyaca göre ayarlayın)
+            # ccxt'de leverage ve marginMode ayarları bazen exchange.set_leverage() veya exchange.set_margin_mode() ile yapılır.
+            # Veya create_order params içinde gönderilir.
+            # Şu anki mexc implementasyonunda bunları direkt create_order içinde gönderiyoruz.
             LEVERAGE = 1 # Varsayılan kaldıraç, MEXC'te manuel ayarlamanız gerekebilir.
-            OPEN_TYPE = 1 # 1=ISOLATED (İzole), 2=CROSSED (Çapraz). Varsayılan izole.
+            # open_type (pozisyon modu) ccxt'de genellikle 'marginMode' olarak geçer: 'isolated' veya 'cross'
+            MARGIN_MODE = 'isolated' # Varsayılan izole.
             
+            # Parametreler ccxt'nin MEXC özel parametrelerini içerir
+            params = {
+                'leverage': LEVERAGE,
+                'marginMode': MARGIN_MODE, # 'isolated' veya 'cross'
+            }
+
             try:
-                order = exchange_session.place_order(
+                # ccxt.create_order yöntemiyle piyasa emri gönder
+                # Piyasa emrinde price alanı None olur.
+                order = exchange_session.create_order(
                     symbol=symbol,
-                    vol=float(quantity_str_for_exchange), # MEXC API genelde float bekler
-                    trade_type=mexc_trade_type,
-                    order_type=1, # 1 for MARKET order
-                    leverage=LEVERAGE, 
-                    open_type=OPEN_TYPE
+                    type='market', # Piyasa emri
+                    side=ccxt_side,
+                    amount=quantity_float_for_checks, # ccxt'de float miktar kullanılır
+                    price=None, # Piyasa emri olduğu için fiyat belirtilmez
+                    params=params
                 )
 
-                print(f"✅ MEXC Piyasa Emri gönderildi: {order}")
+                print(f"✅ MEXC Piyasa Emri gönderildi (CCXT): {order}")
 
-                if order and order.get('code') == 200: # MEXC success code
-                    # Piyasa emri başarılıysa TP/SL plan emirlerini gönder
-                    order_id = order.get('data', {}).get('orderId')
-                    # TP/SL için trade_type'ı tersine çeviriyoruz (pozisyon kapatma)
-                    # Long pozisyon için TP/SL -> trade_type = 4 (close long)
-                    # Short pozisyon için TP/SL -> trade_type = 2 (close short)
-                    mexc_sl_tp_trade_type = 4 if side_for_exchange == "Buy" else 2 
+                # ccxt order yapısından ID çekme
+                order_id = order.get('id') if order else 'N/A'
+                
+                # TP/SL emirlerini gönderme (MEXC için ayrı ayrı)
+                # ccxt'de stop-loss ve take-profit emirleri genellikle 'stop' tipi emirlerle veya 
+                # Unified Margin/Futures için 'trigger' tipi emirlerle yapılır.
+                # MEXC için bunlar genellikle 'stop_loss_limit', 'take_profit_limit' veya 'stop_loss_market', 'take_profit_market' olur.
+                # Eğer MEXC futures API'si basit 'stop' tipi emirleri destekliyorsa (triggerPrice ile):
+                
+                # Take Profit Emri
+                if tp_rounded:
+                    try:
+                        tp_params = {'triggerPrice': float(tp_rounded), 'reduceOnly': True}
+                        tp_order = exchange_session.create_order(
+                            symbol=symbol,
+                            type='take_profit', # Veya 'limit'/'market' ve 'stopPrice' kullanarak
+                            side= 'sell' if ccxt_side == 'buy' else 'buy', # Pozisyon kapatmak için ters yönde emir
+                            amount=quantity_float_for_checks,
+                            price=float(tp_rounded), # Limit fiyat olarak TP fiyatı
+                            params=tp_params
+                        )
+                        print(f"✅ MEXC TP Emri gönderildi (CCXT): {tp_order}")
+                        send_telegram_message_to_queue(f"✅ MEXC TP emri ({symbol}): ID: {tp_order.get('id', 'N/A')}, Durum: {tp_order.get('status', 'N/A')}")
+                    except Exception as e:
+                        print(f"🔥 MEXC TP emri gönderilirken hata (CCXT): {e}")
+                        send_telegram_message_to_queue(f"🚨 MEXC TP emri gönderilirken hata ({symbol}, CCXT): {e}")
 
-                    # Take Profit Emri
-                    if tp_rounded:
-                        try:
-                            tp_order = exchange_session.place_planorder(
-                                symbol=symbol,
-                                order_type=1, # 1 for Take Profit
-                                trigger_price=float(tp_rounded),
-                                vol=float(quantity_str_for_exchange),
-                                side=mexc_sl_tp_trade_type,
-                                trigger_type=1 # 1 for last price
-                            )
-                            print(f"✅ MEXC TP Emri gönderildi: {tp_order}")
-                            send_telegram_message_to_queue(f"✅ MEXC TP emri ({symbol}): {tp_order.get('code')}: {tp_order.get('msg')}")
-                        except Exception as e:
-                            print(f"🔥 MEXC TP emri gönderilirken hata: {e}")
-                            send_telegram_message_to_queue(f"🚨 MEXC TP emri gönderilirken hata ({symbol}): {e}")
-
-                    # Stop Loss Emri
-                    if sl_rounded:
-                        try:
-                            sl_order = exchange_session.place_planorder(
-                                symbol=symbol,
-                                order_type=2, # 2 for Stop Loss
-                                trigger_price=float(sl_rounded),
-                                vol=float(quantity_str_for_exchange),
-                                side=mexc_sl_tp_trade_type,
-                                trigger_type=1 # 1 for last price
-                            )
-                            print(f"✅ MEXC SL Emri gönderildi: {sl_order}")
-                            send_telegram_message_to_queue(f"✅ MEXC SL emri ({symbol}): {sl_order.get('code')}: {sl_order.get('msg')}")
-                        except Exception as e:
-                            print(f"🔥 MEXC SL emri gönderilirken hata: {e}")
-                            send_telegram_message_to_queue(f"🚨 MEXC SL emri gönderilirken hata ({symbol}): {e}")
+                # Stop Loss Emri
+                if sl_rounded:
+                    try:
+                        sl_params = {'triggerPrice': float(sl_rounded), 'reduceOnly': True}
+                        sl_order = exchange_session.create_order(
+                            symbol=symbol,
+                            type='stop_loss', # Veya 'limit'/'market' ve 'stopPrice' kullanarak
+                            side= 'sell' if ccxt_side == 'buy' else 'buy', # Pozisyon kapatmak için ters yönde emir
+                            amount=quantity_float_for_checks,
+                            price=float(sl_rounded), # Limit fiyat olarak SL fiyatı
+                            params=sl_params
+                        )
+                        print(f"✅ MEXC SL Emri gönderildi (CCXT): {sl_order}")
+                        send_telegram_message_to_queue(f"✅ MEXC SL emri ({symbol}): ID: {sl_order.get('id', 'N/A')}, Durum: {sl_order.get('status', 'N/A')}")
+                    except Exception as e:
+                        print(f"🔥 MEXC SL emri gönderilirken hata (CCXT): {e}")
+                        send_telegram_message_to_queue(f"🚨 MEXC SL emri gönderilirken hata ({symbol}, CCXT): {e}")
                     
-                    # Başarılı MEXC ana emir mesajı
-                    success_message = (
-                        f"<b>✅ MEXC Emir Başarılı!</b>\n"
-                        f"<b>Emir ID:</b> <code>{order_id}</code>\n"
-                        f"<b>Sembol:</b> {symbol}\n"
-                        f"<b>Yön:</b> {side_for_exchange}\n"
-                        f"<b>Miktar:</b> {quantity_str_for_exchange}\n"
-                        f"<b>Durum:</b> Başarılı" # MEXC'in 'retMsg' yerine genel bir durum
-                    )
-                    send_telegram_message_to_queue(success_message)
-                    return {"status": "ok", "order": order}, 200
-                else:
-                    error_response_msg = order.get('msg', 'Bilinmeyen MEXC hatası.')
-                    full_error_details = json.dumps(order, indent=2) 
-                    error_message_telegram = f"<b>🚨 MEXC Emir Hatası:</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity_float_for_checks}\n<pre>{full_error_details}</pre>"
-                    send_telegram_message_to_queue(error_message_telegram) 
-                    return {"status": "error", "message": error_response_msg}, 500
-
+                # Başarılı MEXC ana emir mesajı
+                success_message = (
+                    f"<b>✅ MEXC Emir Başarılı (CCXT)!</b>\n"
+                    f"<b>Emir ID:</b> <code>{order_id}</code>\n"
+                    f"<b>Sembol:</b> {symbol}\n"
+                    f"<b>Yön:</b> {side_for_exchange}\n"
+                    f"<b>Miktar:</b> {quantity_str_for_exchange}\n"
+                    f"<b>Durum:</b> {order.get('status', 'Başarılı')}" 
+                )
+                send_telegram_message_to_queue(success_message)
+                return {"status": "ok", "order": order}, 200
+            except ccxt.NetworkError as e:
+                error_response_msg = f"Ağ Hatası: {e}"
+                full_error_details = json.dumps({"error": str(e), "traceback": traceback.format_exc()}, indent=2)
+                error_message_telegram = f"<b>🚨 MEXC Emir Ağ Hatası (CCXT):</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity_float_for_checks}\n<pre>{full_error_details}</pre>"
+                send_telegram_message_to_queue(error_message_telegram)
+                return {"status": "error", "message": error_response_msg}, 500
+            except ccxt.ExchangeError as e:
+                error_response_msg = f"Borsa Hatası: {e}"
+                full_error_details = json.dumps({"error": str(e), "traceback": traceback.format_exc()}, indent=2)
+                error_message_telegram = f"<b>🚨 MEXC Emir Borsa Hatası (CCXT):</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity_float_for_checks}\n<pre>{full_error_details}</pre>"
+                send_telegram_message_to_queue(error_message_telegram)
+                return {"status": "error", "message": error_response_msg}, 500
             except Exception as mexc_order_e:
-                error_msg_mexc_order = f"MEXC emir gönderilirken hata: {mexc_order_e}\nTraceback: {traceback.format_exc()}"
+                error_msg_mexc_order = f"MEXC emir gönderilirken kritik hata (CCXT): {mexc_order_e}\nTraceback: {traceback.format_exc()}"
                 print(error_msg_mexc_order)
                 send_telegram_message_to_queue(f"🚨 MEXC Emir Gönderme KRİTİK HATA! ({symbol}): {error_msg_mexc_order}")
                 return {"status": "error", "message": str(mexc_order_e)}, 500
@@ -466,7 +478,6 @@ def handle_trade_signal(exchange_name, data):
             send_telegram_message_to_queue(f"<b>🚨 KRİTİK BOT HATASI! (order tanımsız)</b>\n<pre>{error_message_full}</pre>")
         else:
             # Eğer order tanımlı ama bir hata varsa, borsa hata detaylarını da ekleyelim.
-            # Bu durum normalde yukarıdaki 'else' bloğunda yakalanır, ama yine de bir güvenlik önlemi.
             error_response_msg = order.get('retMsg', 'Bilinmeyen borsa hatası.') if isinstance(order, dict) else str(order)
             send_telegram_message_to_queue(f"<b>🚨 KRİTİK BOT HATASI!</b>\n{error_response_msg}\n<pre>{error_message_full}</pre>")
         
