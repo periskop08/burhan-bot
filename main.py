@@ -428,22 +428,32 @@ def webhook():
     headers = dict(request.headers)
 
     try:
+        # 🔍 Gelen ham veriyi oku
         raw_data_text = request.get_data(as_text=True)
+        print("📨 Webhook tetiklendi!")
+        print("📦 Ham veri:", raw_data_text)
+
+        # ❗ JSON ayrıştırması
         data = json.loads(raw_data_text)
+        print("✅ JSON ayrıştırıldı:", data)
+
+        # 🔄 Burada normal işlem devam eder (örneğin işlem açma, loglama vb.)
+        return jsonify({"status": "success", "message": "Webhook alındı"}), 200
 
     except json.JSONDecodeError as e:
-        error_msg = f"❗ Webhook verisi JSON olarak ayrıştırılamadı. JSONDecodeError: {e}\n" \
-                    f"Headers: <pre>{json.dumps(headers, indent=2)}</pre>\n" \
-                    f"Raw Data (ilk 500 karakter): <pre>{raw_data_text[:500]}</pre>"
+        error_msg = f"❗ Webhook verisi JSON olarak ayrıştırılamadı.\nHata: {e}\n" \
+                    f"📋 Headers:\n<pre>{json.dumps(headers, indent=2)}</pre>\n" \
+                    f"📦 Ham Veri (ilk 500 karakter):\n<pre>{raw_data_text[:500] if raw_data_text else 'N/A'}</pre>"
         print(error_msg)
-        send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
-        return jsonify({"status": "error", "message": "JSON ayrıştırma hatası veya geçersiz veri"}), 400
+        send_telegram_message_to_queue(f"🚨 Bot Hatası:\n{error_msg}")
+        return jsonify({"status": "error", "message": "JSON ayrıştırma hatası"}), 400
+
     except Exception as e:
-        error_msg = f"❗ Webhook verisi alınırken/işlenirken beklenmedik hata: {e}\n" \
-                    f"Headers: <pre>{json.dumps(headers, indent=2)}</pre>\n" \
-                    f"Raw Data (ilk 500 karakter): <pre>{raw_data_text[:500] if raw_data_text else 'N/A'}</pre>"
+        error_msg = f"❗ Webhook işlenirken beklenmedik bir hata oluştu.\nHata: {e}\n" \
+                    f"📋 Headers:\n<pre>{json.dumps(headers, indent=2)}</pre>\n" \
+                    f"📦 Ham Veri (ilk 500 karakter):\n<pre>{raw_data_text[:500] if raw_data_text else 'N/A'}</pre>"
         print(error_msg)
-        send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
+        send_telegram_message_to_queue(f"🚨 Bot Hatası:\n{error_msg}")
         return jsonify({"status": "error", "message": "Webhook işleme hatası"}), 500
 
     # Ham sinyali Telegram'a gönder
