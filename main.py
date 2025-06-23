@@ -132,7 +132,7 @@ def handle_trade_signal(exchange_name, data):
             send_telegram_message_to_queue(f"🚨 {exchange_name.upper()} Bot Hatası: {error_msg}")
             return {"status": "error", "message": error_msg}, 400
         
-        symbol = symbol.upper() 
+        symbol = symbol.upper().strip() # Sembolü temizle (boşlukları sil)
         send_telegram_message_to_queue(f"ℹ️ {exchange_name.upper()} Gelen ham sembol (işlem öncesi): <b>{symbol}</b>")
 
         try:
@@ -153,6 +153,7 @@ def handle_trade_signal(exchange_name, data):
             exchange_session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
             print(f"ℹ️ Bybit Session başlatıldı (Testnet: {BYBIT_TESTNET_MODE})")
             
+            # Bybit için '.P' ekini temizle
             if symbol.endswith(".P"):
                 symbol = symbol[:-2] 
                 print(f"Bybit sembol '.P' ekinden temizlendi: {symbol}")
@@ -176,6 +177,7 @@ def handle_trade_signal(exchange_name, data):
                 pass 
             print(f"ℹ️ MEXC Futures Session (ccxt) başlatıldı.")
             
+            # MEXC için '.P' ekini temizlemeye gerek yok
             if symbol.endswith(".P"): 
                 symbol = symbol[:-2] 
                 print(f"MEXC sembol '.P' ekinden temizlendi (genel temizlik): {symbol}")
@@ -304,7 +306,7 @@ def handle_trade_signal(exchange_name, data):
         actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry_rounded - sl_rounded))
         
         trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ ({exchange_name.upper()}, Hedef Poz. Değeri: ${sabitMiktar_usd:.2f}):</b>\n" 
+            f"<b>� YENİ EMİR SİPARİŞİ ({exchange_name.upper()}, Hedef Poz. Değeri: ${sabitMiktar_usd:.2f}):</b>\n" 
             f"<b>Symbol:</b> {symbol}\n"
             f"<b>Yön:</b> {side_for_exchange.upper()}\n" 
             f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n" 
@@ -450,20 +452,25 @@ def handle_trade_signal(exchange_name, data):
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini Alır ve Yönlendirir) ===
 @app.route("/webhook/bybit", methods=["POST"]) # YENİ BYBIT ENDPOINT
 def webhook_bybit():
-    # Ham request verisini ve başlıkları logla
     raw_data_text = request.get_data(as_text=True)
     headers = dict(request.headers)
+    
     print(f"DEBUG_WEBHOOK_BYBIT: Gelen ham veri: '{raw_data_text}'")
     print(f"DEBUG_WEBHOOK_BYBIT: Gelen başlıklar: {json.dumps(headers, indent=2)}")
     send_telegram_message_to_queue(f"DEBUG_WEBHOOK_BYBIT: Gelen ham veri: <code>{raw_data_text}</code>\nBaşlıklar: <pre>{json.dumps(headers, indent=2)}</pre>")
 
     try:
-        data = request.get_json()
-    except Exception as e:
-        error_msg = f"❗ BYBIT Webhook verisi JSON olarak ayrıştırılamadı. Hata: {e}. Ham veri: '{raw_data_text[:500]}'"
+        data = json.loads(raw_data_text) # request.get_json() yerine kendi JSON ayrıştırmamızı kullanıyoruz
+    except json.JSONDecodeError as e:
+        error_msg = f"❗ BYBIT Webhook verisi JSON olarak ayrıştırılamadı. JSONDecodeError: {e}. Ham veri (ilk 500 karakter): '{raw_data_text[:500]}'"
         print(error_msg)
         send_telegram_message_to_queue(f"🚨 BYBIT Bot Hatası: {error_msg}")
         return jsonify({"status": "error", "message": "JSON ayrıştırma hatası veya geçersiz veri"}), 400
+    except Exception as e:
+        error_msg = f"❗ BYBIT Webhook verisi işlenirken beklenmedik hata. Hata: {e}. Ham veri (ilk 500 karakter): '{raw_data_text[:500]}'"
+        print(error_msg)
+        send_telegram_message_to_queue(f"🚨 BYBIT Bot Hatası: {error_msg}")
+        return jsonify({"status": "error", "message": "Webhook işleme hatası"}), 500
 
     signal_message_for_telegram = f"<b>🔔 TradingView Ham Sinyali (Bybit İçin):</b>\n<pre>{json.dumps(data, indent=2)}</pre>"
     send_telegram_message_to_queue(signal_message_for_telegram)
@@ -474,20 +481,25 @@ def webhook_bybit():
 
 @app.route("/webhook/mexc", methods=["POST"]) # YENİ MEXC ENDPOINT
 def webhook_mexc():
-    # Ham request verisini ve başlıkları logla
     raw_data_text = request.get_data(as_text=True)
     headers = dict(request.headers)
+    
     print(f"DEBUG_WEBHOOK_MEXC: Gelen ham veri: '{raw_data_text}'")
     print(f"DEBUG_WEBHOOK_MEXC: Gelen başlıklar: {json.dumps(headers, indent=2)}")
     send_telegram_message_to_queue(f"DEBUG_WEBHOOK_MEXC: Gelen ham veri: <code>{raw_data_text}</code>\nBaşlıklar: <pre>{json.dumps(headers, indent=2)}</pre>")
 
     try:
-        data = request.get_json()
-    except Exception as e:
-        error_msg = f"❗ MEXC Webhook verisi JSON olarak ayrıştırılamadı. Hata: {e}. Ham veri: '{raw_data_text[:500]}'"
+        data = json.loads(raw_data_text) # request.get_json() yerine kendi JSON ayrıştırmamızı kullanıyoruz
+    except json.JSONDecodeError as e:
+        error_msg = f"❗ MEXC Webhook verisi JSON olarak ayrıştırılamadı. JSONDecodeError: {e}. Ham veri (ilk 500 karakter): '{raw_data_text[:500]}'"
         print(error_msg)
         send_telegram_message_to_queue(f"🚨 MEXC Bot Hatası: {error_msg}")
         return jsonify({"status": "error", "message": "JSON ayrıştırma hatası veya geçersiz veri"}), 400
+    except Exception as e:
+        error_msg = f"❗ MEXC Webhook verisi işlenirken beklenmedik hata. Hata: {e}. Ham veri (ilk 500 karakter): '{raw_data_text[:500]}'"
+        print(error_msg)
+        send_telegram_message_to_queue(f"🚨 MEXC Bot Hatası: {error_msg}")
+        return jsonify({"status": "error", "message": "Webhook işleme hatası"}), 500
 
 
     signal_message_for_telegram = f"<b>🔔 TradingView Ham Sinyali (MEXC İçin):</b>\n<pre>{json.dumps(data, indent=2)}</pre>"
