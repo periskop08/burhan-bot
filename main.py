@@ -6,8 +6,8 @@ import os
 import decimal
 import time
 import threading
-from queue import Queue 
-from pybit.unified_trading import HTTP # Bybit API istemcisi
+from queue import Queue
+from pybit.unified_trading import HTTP  # Bybit API istemcisi
 import hmac
 import hashlib
 
@@ -30,6 +30,7 @@ MEXC_TESTNET_MODE = os.getenv("MEXC_TESTNET_MODE", "False").lower() in ('true', 
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
 TELEGRAM_RATE_LIMIT_DELAY = 1.0
+
 
 def telegram_message_sender():
     global LAST_TELEGRAM_MESSAGE_TIME
@@ -60,11 +61,13 @@ def telegram_message_sender():
         else:
             time.sleep(0.1)
 
+
 def send_telegram_message_to_queue(message_text):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         print("Telegram BOT_TOKEN veya CHAT_ID tanımlı değil.")
         return
     telegram_message_queue.put(message_text)
+
 
 def round_to_precision(value, precision_step):
     if value is None:
@@ -75,6 +78,7 @@ def round_to_precision(value, precision_step):
     rounded_value = decimal.Decimal(str(value)).quantize(precision_decimal, rounding=decimal.ROUND_HALF_UP)
     return float(rounded_value)
 
+
 def round_quantity_to_exchange_precision(value, precision_step):
     if value is None:
         return ""
@@ -83,7 +87,8 @@ def round_quantity_to_exchange_precision(value, precision_step):
     d_value = decimal.Decimal(str(value))
     d_precision_step = decimal.Decimal(str(precision_step))
     num_decimals_from_step = abs(d_precision_step.as_tuple().exponent)
-    rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'), rounding=decimal.ROUND_HALF_UP) * d_precision_step
+    rounded_d_value_by_step = (d_value / d_precision_step).quantize(decimal.Decimal('1'),
+                                                                    rounding=decimal.ROUND_HALF_UP) * d_precision_step
     if abs(rounded_d_value_by_step) >= 1000:
         final_decimals = min(num_decimals_from_step, 0)
     elif abs(rounded_d_value_by_step) >= 100:
@@ -93,6 +98,7 @@ def round_quantity_to_exchange_precision(value, precision_step):
     else:
         final_decimals = min(num_decimals_from_step, 6)
     return f"{rounded_d_value_by_step:.{final_decimals}f}"
+
 
 class MEXCSession:
     def __init__(self, api_key, api_secret, testnet=False):
@@ -134,11 +140,15 @@ class MEXCSession:
                 "retMsg": f"API çağrısı hatası: {str(e)}",
                 "result": {}
             }
+
     def get_instruments_info(self, category, symbol):
         return {
             'retCode': 0,
-            'result': {'list': [{'priceFilter': {'tickSize': '0.1'}, 'lotFilter': {'qtyStep': '0.0001', 'minOrderQty': '0.001', 'maxOrderQty': '1000', 'minOrderValue': '5'}}]}
+            'result': {'list': [{'priceFilter': {'tickSize': '0.1'},
+                                 'lotFilter': {'qtyStep': '0.0001', 'minOrderQty': '0.001', 'maxOrderQty': '1000',
+                                               'minOrderValue': '5'}}]}
         }
+
 
 # Devamında handle_trade_signal ve Flask route'ların tümü aynı kalıyor.
 # Yukarıdaki güncellemeyle artık MEXC tarafı gerçek emir gönderebilir hale geldi.
@@ -161,21 +171,22 @@ def handle_trade_signal(exchange_name, data):
         exchange_api_secret = MEXC_API_SECRET
         exchange_testnet_mode = MEXC_TESTNET_MODE
         # Gerçek MEXC SDK'sı entegre edildiğinde bu satırı değiştirmelisin:
-        exchange_session = MEXCSession(api_key=exchange_api_key, api_secret=exchange_api_secret, testnet=exchange_testnet_mode)
+        exchange_session = MEXCSession(api_key=exchange_api_key, api_secret=exchange_api_secret,
+                                       testnet=exchange_testnet_mode)
     else:
         error_msg = f"❗ Tanımlanamayan borsa adı: {exchange_name}"
         print(error_msg)
         send_telegram_message_to_queue(f"🚨 Bot Hatası: {error_msg}")
         return {"status": "error", "message": error_msg}, 400
 
-    order = None # `order` değişkenini fonksiyon başında inisiyalize et
+    order = None  # `order` değişkenini fonksiyon başında inisiyalize et
 
     try:
         symbol = data.get("symbol")
         side = data.get("side")
         entry = data.get("entry")
-        sl = data.get("sl") 
-        tp = data.get("tp") 
+        sl = data.get("sl")
+        tp = data.get("tp")
 
         # Giriş verilerini kontrol et
         if not all([symbol, side, entry, sl, tp]):
@@ -195,20 +206,20 @@ def handle_trade_signal(exchange_name, data):
             print(error_msg)
             send_telegram_message_to_queue(f"🚨 {exchange_name.upper()} Bot Hatası: {error_msg}")
             return {"status": "error", "message": error_msg}, 400
-        
+
         # Sembol temizliği (varsa prefix'i kaldır)
         if ":" in symbol:
             original_symbol = symbol
-            symbol = symbol.split(":")[-1] # Prefix'i at
+            symbol = symbol.split(":")[-1]  # Prefix'i at
             print(f"Sembol prefix'ten temizlendi: {original_symbol} -> {symbol}")
             send_telegram_message_to_queue(f"ℹ️ {exchange_name.upper()} Sembol prefix temizlendi: <b>{symbol}</b>")
-        
-        if symbol.endswith(".P"): # TradingView'den gelen bazı pariteler için '.P' eki olabilir
-            symbol = symbol[:-2] 
+
+        if symbol.endswith(".P"):  # TradingView'den gelen bazı pariteler için '.P' eki olabilir
+            symbol = symbol[:-2]
             print(f"Sembol '.P' ekinden temizlendi: {symbol}")
             send_telegram_message_to_queue(f"ℹ️ {exchange_name.upper()} Sembol '.P' eki temizlendi: <b>{symbol}</b>")
-        
-        symbol = symbol.upper() # Tüm sembolleri büyük harfe çevir
+
+        symbol = symbol.upper()  # Tüm sembolleri büyük harfe çevir
         send_telegram_message_to_queue(f"ℹ️ {exchange_name.upper()} Nihai işlem sembolü: <b>{symbol}</b>")
 
         # Fiyat verilerini float'a çevirme
@@ -223,41 +234,46 @@ def handle_trade_signal(exchange_name, data):
             return {"status": "error", "message": "Geçersiz fiyat formatı"}, 400
 
         # Borsadan enstrüman bilgilerini al
-        tick_size = 0.000001 
-        lot_size = 0.000001  
-        min_order_qty = 0.0  
-        max_order_qty = float('inf') 
-        min_order_value = 0.0 
-        
+        tick_size = 0.000001
+        lot_size = 0.000001
+        min_order_qty = 0.0
+        max_order_qty = float('inf')
+        min_order_value = 0.0
+
         try:
             exchange_info_response = exchange_session.get_instruments_info(category="linear", symbol=symbol)
-            if exchange_info_response and exchange_info_response['retCode'] == 0 and exchange_info_response['result']['list']:
+            if exchange_info_response and exchange_info_response['retCode'] == 0 and exchange_info_response['result'][
+                'list']:
                 instrument_info = exchange_info_response['result']['list'][0]
                 price_filter = instrument_info.get('priceFilter', {})
                 lot_filter = instrument_info.get('lotFilter', {})
 
                 if 'tickSize' in price_filter:
                     tick_size = float(price_filter['tickSize'])
-                
+
                 if 'qtyStep' in lot_filter:
                     lot_size = float(lot_filter['qtyStep'])
-                elif 'minTradingQty' in lot_filter: 
+                elif 'minTradingQty' in lot_filter:
                     lot_size = float(lot_filter['minTradingQty'])
 
                 if 'minOrderQty' in lot_filter:
                     min_order_qty = float(lot_filter['minOrderQty'])
-                
-                if 'maxOrderQty' in lot_filter: 
+
+                if 'maxOrderQty' in lot_filter:
                     max_order_qty = float(lot_filter['maxOrderQty'])
 
-                if 'minOrderValue' in lot_filter: 
+                if 'minOrderValue' in lot_filter:
                     min_order_value = float(lot_filter['minOrderValue'])
 
-                print(f"{exchange_name.upper()} {symbol} için API'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}, Min Order Qty: {min_order_qty}, Max Order Qty: {max_order_qty}, Min Order Value: {min_order_value}")
-                send_telegram_message_to_queue(f"ℹ️ {exchange_name.upper()} {symbol} için hassasiyetler alındı:\nFiyat Adımı: <code>{tick_size}</code>\nMiktar Adımı: <code>{lot_size}</code>\nMin Emir Miktarı: <code>{min_order_qty}</code>\nMax Emir Miktarı: <code>{max_order_qty}</code>\nMin Emir Değeri: <code>{min_order_value} USDT</code>")
+                print(
+                    f"{exchange_name.upper()} {symbol} için API'den alınan Tick Size: {tick_size}, Lot Size: {lot_size}, Min Order Qty: {min_order_qty}, Max Order Qty: {max_order_qty}, Min Order Value: {min_order_value}")
+                send_telegram_message_to_queue(
+                    f"ℹ️ {exchange_name.upper()} {symbol} için hassasiyetler alındı:\nFiyat Adımı: <code>{tick_size}</code>\nMiktar Adımı: <code>{lot_size}</code>\nMin Emir Miktarı: <code>{min_order_qty}</code>\nMax Emir Miktarı: <code>{max_order_qty}</code>\nMin Emir Değeri: <code>{min_order_value} USDT</code>")
             else:
-                print(f"Uyarı: {exchange_name.upper()} {symbol} için hassasiyet bilgisi bulunamadı. API yanıtı: {exchange_info_response}. Varsayılanlar kullanılıyor.")
-                send_telegram_message_to_queue(f"⚠️ {exchange_name.upper()} {symbol} için hassasiyet bilgisi alınamadı. Varsayılanlar kullanılıyor.")
+                print(
+                    f"Uyarı: {exchange_name.upper()} {symbol} için hassasiyet bilgisi bulunamadı. API yanıtı: {exchange_info_response}. Varsayılanlar kullanılıyor.")
+                send_telegram_message_to_queue(
+                    f"⚠️ {exchange_name.upper()} {symbol} için hassasiyet bilgisi alınamadı. Varsayılanlar kullanılıyor.")
 
         except Exception as api_e:
             error_msg_api = f"{exchange_name.upper()} sembol/hassasiyet bilgisi alınırken hata: {api_e}. Varsayılan hassasiyetler kullanılıyor."
@@ -268,7 +284,7 @@ def handle_trade_signal(exchange_name, data):
         entry_rounded = round_to_precision(entry, tick_size)
         sl_rounded = round_to_precision(sl, tick_size)
         tp_rounded = round_to_precision(tp, tick_size)
-        
+
         # === KRİTİK KONTROL: YUVARLAMA SONRASI SL VE ENTRY AYNI MI? ===
         if str(entry_rounded) == str(sl_rounded):
             error_msg = f"❗ GİRİŞ FİYATI ({entry_rounded}) ve STOP LOSS FİYATI ({sl_rounded}) YUVARLAMA SONRASI AYNI GELDİ. Risk anlamsız olduğu için emir gönderilmiyor. Lütfen Pine Script stratejinizi kontrol edin ve SL'nin Girişten belirgin bir mesafede olduğundan emin olun."
@@ -277,7 +293,8 @@ def handle_trade_signal(exchange_name, data):
             return {"status": "error", "message": error_msg}, 400
 
         # === POZİSYON BÜYÜKLÜĞÜ AYARI (Kullanıcının tercihine göre 40$ ile işlem açacak) ===
-        sabitMiktar_usd = 40.0 # Pozisyon değeri sabit olarak 40$ olarak ayarlandı
+        sabitMiktar_usd = 400.0  # Pozisyon değeri sabit olarak 40$ olarak ayarlandı
+        
 
         if entry_rounded == 0:
             error_msg = "❗ Giriş fiyatı sıfır geldi. Pozisyon miktarı hesaplanamıyor."
@@ -287,12 +304,13 @@ def handle_trade_signal(exchange_name, data):
 
         # Adet miktarını sabit dolar değerine göre hesapla
         calculated_quantity_float = sabitMiktar_usd / entry_rounded
-        
+
         # Miktarı lot_size'ın katı olacak şekilde yuvarla ve string'e dönüştür
         quantity_str_for_exchange = round_quantity_to_exchange_precision(calculated_quantity_float, lot_size)
-        
+
         # Debug mesajları
-        send_telegram_message_to_queue(f"DEBUG: {exchange_name.upper()} Hedef Pozisyon Değeri ({sabitMiktar_usd}$), Giriş Fiyatı ({entry_rounded}). Ham hesaplanan miktar: {calculated_quantity_float:.8f}. Bybit'e giden son miktar (string): {quantity_str_for_exchange}")
+        send_telegram_message_to_queue(
+            f"DEBUG: {exchange_name.upper()} Hedef Pozisyon Değeri ({sabitMiktar_usd}$), Giriş Fiyatı ({entry_rounded}). Ham hesaplanan miktar: {calculated_quantity_float:.8f}. Bybit'e giden son miktar (string): {quantity_str_for_exchange}")
 
         # Limit kontrollerini yapmak için string'i tekrar float'a çeviriyoruz
         quantity_float_for_checks = float(quantity_str_for_exchange)
@@ -303,21 +321,21 @@ def handle_trade_signal(exchange_name, data):
             print(error_msg)
             send_telegram_message_to_queue(f"🚨 {exchange_name.upper()} Bot Hatası: {error_msg}")
             return {"status": "error", "message": error_msg}, 400
-        
+
         if quantity_float_for_checks > max_order_qty:
             error_msg = f"❗ Nihai miktar ({quantity_float_for_checks}) maksimum emir miktarı ({max_order_qty}) üstündedir. Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message_to_queue(f"🚨 {exchange_name.upper()} Bot Hatası: {error_msg}")
             return {"status": "error", "message": error_msg}, 400
 
-        if quantity_float_for_checks <= 0: 
+        if quantity_float_for_checks <= 0:
             error_msg = f"❗ Nihai hesaplanan miktar sıfır veya negatif ({quantity_float_for_checks}). Emir gönderilmiyor."
             print(error_msg)
             send_telegram_message_to_queue(f"🚨 {exchange_name.upper()} Bot Hatası: {error_msg}")
             return {"status": "error", "message": error_msg}, 400
 
-        # Gizli minimum işlem değerini kontrol etmek için 
-        implied_min_order_value = max(10.0, min_order_value) 
+        # Gizli minimum işlem değerini kontrol etmek için
+        implied_min_order_value = max(10.0, min_order_value)
 
         order_value = quantity_float_for_checks * entry_rounded
         if implied_min_order_value > 0 and order_value < implied_min_order_value:
@@ -327,29 +345,40 @@ def handle_trade_signal(exchange_name, data):
             return {"status": "error", "message": error_msg}, 400
 
         actual_risk_if_sl_hit = abs(quantity_float_for_checks * (entry_rounded - sl_rounded))
-        
+
         trade_summary = (
-            f"<b>📢 YENİ EMİR SİPARİŞİ ({exchange_name.upper()}, Hedef Poz. Değeri: ${sabitMiktar_usd:.2f}):</b>\n" 
+            f"<b>📢 YENİ EMİR SİPARİŞİ ({exchange_name.upper()}, Hedef Poz. Değeri: ${sabitMiktar_usd:.2f}):</b>\n"
             f"<b>Symbol:</b> {symbol}\n"
-            f"<b>Yön:</b> {side_for_exchange.upper()}\n" 
-            f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n" 
-            f"<b>Giriş Fiyatı:</b> {entry_rounded}\n" 
-            f"<b>Stop Loss (SL):</b> {sl_rounded}\n" 
-            f"<b>Take Profit (TP):</b> {tp_rounded}\n" 
-            f"<b>Hesaplanan Fiili Risk (SL vurulursa):</b> ${actual_risk_if_sl_hit:.2f}" 
+            f"<b>Yön:</b> {side_for_exchange.upper()}\n"
+            f"<b>Miktar (Adet):</b> {quantity_float_for_checks}\n"
+            f"<b>Giriş Fiyatı:</b> {entry_rounded}\n"
+            f"<b>Stop Loss (SL):</b> {sl_rounded}\n"
+            f"<b>Take Profit (TP):</b> {tp_rounded}\n"
+            f"<b>Hesaplanan Fiili Risk (SL vurulursa):</b> ${actual_risk_if_sl_hit:.2f}"
         )
         send_telegram_message_to_queue(trade_summary)
-        
+
+        if side_for_exchange == "Buy":
+            ondalik_sayisi = len(str(entry).split('.')[-1])
+            sl_rounded = round(entry * 0.99, ondalik_sayisi)
+            ondalik_sayisi2 = len(str(entry).split('.')[-1])
+            tp_rounded = round(entry * 1.02, ondalik_sayisi2)
+        else:
+            ondalik_sayisi = len(str(entry).split('.')[-1])
+            sl_rounded = round(entry * 1.01, ondalik_sayisi)
+            ondalik_sayisi2 = len(str(entry).split('.')[-1])
+            tp_rounded = round(entry * 0.98, ondalik_sayisi2)
+            
         # Borsaya emir gönder
         order = exchange_session.place_order(
-            category="linear", # Vadeli işlemler için 'linear', spot için 'spot' - MEXC için kontrol edin
+            category="linear",  # Vadeli işlemler için 'linear', spot için 'spot' - MEXC için kontrol edin
             symbol=symbol,
-            side=side_for_exchange, 
-            orderType="Market", 
+            side=side_for_exchange,
+            orderType="Market",
             qty=quantity_str_for_exchange,  # Borsaya string hali gönderildi
-            timeInForce="GoodTillCancel", 
-            stopLoss=str(sl_rounded),   
-            takeProfit=str(tp_rounded)  
+            timeInForce="GoodTillCancel",
+            stopLoss=str(sl_rounded),
+            takeProfit=str(tp_rounded)
         )
 
         print(f"✅ {exchange_name.upper()} Emir gönderildi: {order}")
@@ -365,13 +394,13 @@ def handle_trade_signal(exchange_name, data):
                 f"<b>Fiyat:</b> {order_info.get('price', 'N/A')}\n"
                 f"<b>Durum:</b> {order.get('retMsg', 'Başarılı')}"
             )
-            send_telegram_message_to_queue(success_message) 
+            send_telegram_message_to_queue(success_message)
             return {"status": "ok", "order": order}, 200
         else:
             error_response_msg = order.get('retMsg', 'Bilinmeyen borsa hatası.')
-            full_error_details = json.dumps(order, indent=2) 
+            full_error_details = json.dumps(order, indent=2)
             error_message_telegram = f"<b>� {exchange_name.upper()} Emir Hatası:</b>\n{error_response_msg}\nSinyal: {symbol}, {side}, Miktar: {quantity_float_for_checks}\n<pre>{full_error_details}</pre>"
-            send_telegram_message_to_queue(error_message_telegram) 
+            send_telegram_message_to_queue(error_message_telegram)
             return {"status": "error", "message": error_response_msg}, 500
 
     except Exception as e:
@@ -379,12 +408,15 @@ def handle_trade_signal(exchange_name, data):
         print(error_message_full)
         # Eğer order değişkeni burada tanımlı değilse, sadece hata mesajını gönder.
         if 'order' not in locals() or order is None:
-            send_telegram_message_to_queue(f"<b>🚨 KRİTİK {exchange_name.upper()} BOT HATASI! (order tanımsız)</b>\n<pre>{error_message_full}</pre>")
+            send_telegram_message_to_queue(
+                f"<b>🚨 KRİTİK {exchange_name.upper()} BOT HATASI! (order tanımsız)</b>\n<pre>{error_message_full}</pre>")
         else:
             # Eğer order tanımlı ama bir hata varsa, borsa hata detaylarını da ekleyelim.
-            error_response_msg = order.get('retMsg', 'Bilinmeyen borsa hatası.') if isinstance(order, dict) else str(order)
-            send_telegram_message_to_queue(f"<b>🚨 KRİTİK {exchange_name.upper()} BOT HATASI!</b>\n{error_response_msg}\n<pre>{error_message_full}</pre>")
-        
+            error_response_msg = order.get('retMsg', 'Bilinmeyen borsa hatası.') if isinstance(order, dict) else str(
+                order)
+            send_telegram_message_to_queue(
+                f"<b>🚨 KRİTİK {exchange_name.upper()} BOT HATASI!</b>\n{error_response_msg}\n<pre>{error_message_full}</pre>")
+
         return {"status": "error", "message": str(e)}, 500
 
 
@@ -398,7 +430,7 @@ def webhook():
     try:
         raw_data_text = request.get_data(as_text=True)
         data = json.loads(raw_data_text)
-        
+
     except json.JSONDecodeError as e:
         error_msg = f"❗ Webhook verisi JSON olarak ayrıştırılamadı. JSONDecodeError: {e}\n" \
                     f"Headers: <pre>{json.dumps(headers, indent=2)}</pre>\n" \
@@ -419,30 +451,33 @@ def webhook():
     send_telegram_message_to_queue(signal_message_for_telegram)
 
     symbol_from_tv = data.get("symbol", "").upper()
-    exchange_to_use = "bybit" # Varsayılan borsa
+    exchange_to_use = "bybit"  # Varsayılan borsa
 
     # Sembol prefix'ine göre borsayı belirle
     if symbol_from_tv.startswith("MEXC:"):
         exchange_to_use = "mexc"
-        data["symbol"] = symbol_from_tv[len("MEXC:"):].strip() # Sembolü temizle
+        data["symbol"] = symbol_from_tv[len("MEXC:"):].strip()  # Sembolü temizle
     elif symbol_from_tv.startswith("BYBIT:"):
         exchange_to_use = "bybit"
-        data["symbol"] = symbol_from_tv[len("BYBIT:"):].strip() # Sembolü temizle
+        data["symbol"] = symbol_from_tv[len("BYBIT:"):].strip()  # Sembolü temizle
     # Eğer başka bir prefix varsa (örn. BINANCE:), şimdilik Bybit'e yönlendirir,
     # ancak loglarda "Sembol prefix temizlendi" mesajını görürsünüz.
     # Gelecekte buraya başka borsalar da eklenebilir.
 
     print(f"Sinyal {exchange_to_use.upper()} borsası için yönlendiriliyor.")
-    send_telegram_message_to_queue(f"➡️ Sinyal <b>{exchange_to_use.upper()}</b> borsası için yönlendirildi: <b>{data.get('symbol')}</b>")
+    send_telegram_message_to_queue(
+        f"➡️ Sinyal <b>{exchange_to_use.upper()}</b> borsası için yönlendirildi: <b>{data.get('symbol')}</b>")
 
     # Yönlendirilen sinyali ilgili borsanın işlem yöneticisine gönder
     response_data, status_code = handle_trade_signal(exchange_to_use, data)
     return jsonify(response_data), status_code
 
+
 # === Ana Sayfa (Botun Aktif Olduğunu Kontrol Etmek İçin) ===
 @app.route("/", methods=["GET"])
 def home():
     return "Burhan-Bot aktif 💪"
+
 
 # === Uygulamayı Başlat ===
 if __name__ == "__main__":
