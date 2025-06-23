@@ -117,22 +117,29 @@ def round_quantity_to_exchange_precision(value, precision_step):
     return f"{rounded_d_value_by_step:.{final_decimals}f}"
 
 # === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
+# === Ana Webhook Endpoint'i (TradingView Sinyallerini İşler) ===
 @app.route("/webhook", methods=["POST"])
 def webhook():
     # --- JSON Ayrıştırma ve Hata Yakalama ---
     data = None
     raw_data_text = None
     headers = dict(request.headers)
-    order = None # KRİTİK DEĞİŞİKLİK: order değişkenini fonksiyon başında inisiyalize et
+    order = None  # KRİTİK DEĞİŞİKLİK: order değişkenini fonksiyon başında inisiyalize et
 
     try:
         # Önce gelen veriyi ham metin olarak oku
         raw_data_text = request.get_data(as_text=True)
         
+        # 🔍 Log çıktısı ekle
+        print("Webhook'tan gelen veri:", raw_data_text)
+
         # Ham metni JSON olarak ayrıştırmayı dene
         data = json.loads(raw_data_text)
-        
+    
     except json.JSONDecodeError as e:
+        print("❌ JSON ayrıştırma hatası:", str(e))
+        print("📦 Ham veri:", raw_data_text)
+        return jsonify({"success": False, "error": "JSON parse error", "details": str(e)}), 400
         # JSON ayrıştırma hatası olursa detaylı log ve Telegram mesajı gönder
         error_msg = f"❗ Webhook verisi JSON olarak ayrıştırılamadı. JSONDecodeError: {e}\n" \
                     f"Headers: <pre>{json.dumps(headers, indent=2)}</pre>\n" \
