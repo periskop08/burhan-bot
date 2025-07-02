@@ -354,14 +354,14 @@ def webhook():
         # Stop Loss ve Take Profit hesaplama
         if side_for_bybit == "Buy":
             ondalik_sayisi = len(str(entry).split('.')[-1])
-            sl_rounded = round(entry * 0.975, ondalik_sayisi)
+            sl_rounded = round(entry * 0.985, ondalik_sayisi)
             ondalik_sayisi2 = len(str(entry).split('.')[-1])
-            tp_rounded = round(entry * 1.05, ondalik_sayisi2)
+            tp_rounded = round(entry * 1.03, ondalik_sayisi2)
         else:
             ondalik_sayisi = len(str(entry).split('.')[-1])
-            sl_rounded = round(entry * 1.025, ondalik_sayisi)
+            sl_rounded = round(entry * 1.015, ondalik_sayisi)
             ondalik_sayisi2 = len(str(entry).split('.')[-1])
-            tp_rounded = round(entry * 0.95, ondalik_sayisi2)
+            tp_rounded = round(entry * 0.97, ondalik_sayisi2)
 
         # Bybit'e emir gönder
         order = session.place_order(
