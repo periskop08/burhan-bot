@@ -351,17 +351,15 @@ def webhook():
         )
         send_telegram_message_to_queue(trade_summary)
 
-        # Stop Loss ve Take Profit hesaplama
+        # Stop Loss ve Take Profit hesaplama - Yuvarlanmış entry fiyatı kullan
         if side_for_bybit == "Buy":
-            ondalik_sayisi = len(str(entry).split('.')[-1])
-            sl_rounded = round(entry * 0.985, ondalik_sayisi)
-            ondalik_sayisi2 = len(str(entry).split('.')[-1])
-            tp_rounded = round(entry * 1.03, ondalik_sayisi2)
+            # Long pozisyon: SL %1.5 altında, TP %3 üstünde
+            sl_rounded = round_to_precision(entry_rounded * 0.985, tick_size)
+            tp_rounded = round_to_precision(entry_rounded * 1.03, tick_size)
         else:
-            ondalik_sayisi = len(str(entry).split('.')[-1])
-            sl_rounded = round(entry * 1.015, ondalik_sayisi)
-            ondalik_sayisi2 = len(str(entry).split('.')[-1])
-            tp_rounded = round(entry * 0.97, ondalik_sayisi2)
+            # Short pozisyon: SL %1.5 üstünde, TP %3 altında
+            sl_rounded = round_to_precision(entry_rounded * 1.015, tick_size)
+            tp_rounded = round_to_precision(entry_rounded * 0.97, tick_size)
 
         # Bybit'e emir gönder
         order = session.place_order(
