@@ -21,6 +21,101 @@ BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
+# === Pozisyon Takip Sistemi ===
+position_data = {}  # Bybit hassasiyetine uygun hesaplanmış değerleri tutar
+position_check_interval = 15  # 15 saniye
+
+def check_and_add_sl_tp():
+    """
+    Her 15 saniyede bir açık pozisyonları kontrol eder ve SL/TP ekler
+    """
+    global position_data
+    
+    try:
+        session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
+        
+        # Açık pozisyonları al
+        positions_response = session.get_positions(category="linear")
+        
+        if positions_response and positions_response.get('retCode') == 0:
+            positions = positions_response.get('result', {}).get('list', [])
+            
+            for position in positions:
+                symbol = position.get('symbol')
+                side = position.get('side')
+                size = float(position.get('size', 0))
+                
+                # Sadece açık pozisyonları kontrol et
+                if size > 0:
+                    # Pozisyonun SL/TP'si var mı kontrol et
+                    stopLoss = position.get('stopLoss')
+                    takeProfit = position.get('takeProfit')
+                    
+                    # SL/TP yoksa ve bizim listemizde varsa
+                    if (not stopLoss or not takeProfit) and symbol in position_data:
+                        position_info = position_data[symbol]
+                        
+                        # SL/TP ekle
+                        try:
+                            # SL emri ekle
+                            if not stopLoss:
+                                sl_order = session.place_order(
+                                    category="linear",
+                                    symbol=symbol,
+                                    side="Sell" if side == "Buy" else "Buy",
+                                    orderType="StopMarket",
+                                    qty=str(size),
+                                    stopPrice=str(position_info['sl_rounded']),  # ✅ Bybit hassasiyetine uygun SL
+                                    timeInForce="GoodTillCancel"
+                                )
+                                if sl_order and sl_order.get('retCode') == 0:
+                                    print(f"✅ {symbol} için SL emri eklendi: {position_info['sl_rounded']}")
+                                    send_telegram_message_to_queue(f"✅ {symbol} için SL emri eklendi: {position_info['sl_rounded']}")
+                            
+                            # TP emri ekle
+                            if not takeProfit:
+                                tp_order = session.place_order(
+                                    category="linear",
+                                    symbol=symbol,
+                                    side="Sell" if side == "Buy" else "Buy",
+                                    orderType="Limit",
+                                    qty=str(size),
+                                    price=str(position_info['tp_rounded']),  # ✅ Bybit hassasiyetine uygun TP
+                                    timeInForce="GoodTillCancel"
+                                )
+                                if tp_order and tp_order.get('retCode') == 0:
+                                    print(f"✅ {symbol} için TP emri eklendi: {position_info['tp_rounded']}")
+                                    send_telegram_message_to_queue(f"✅ {symbol} için TP emri eklendi: {position_info['tp_rounded']}")
+                            
+                            # SL/TP eklendiyse listeden çıkar
+                            if (sl_order and sl_order.get('retCode') == 0) or (tp_order and tp_order.get('retCode') == 0):
+                                del position_data[symbol]
+                                print(f"✅ {symbol} pozisyonu SL/TP ile tamamlandı")
+                                
+                        except Exception as e:
+                            print(f"❌ {symbol} için SL/TP eklenirken hata: {e}")
+                            send_telegram_message_to_queue(f"❌ {symbol} için SL/TP eklenirken hata: {e}")
+                            
+    except Exception as e:
+        print(f"❌ Pozisyon kontrolü sırasında hata: {e}")
+        send_telegram_message_to_queue(f"❌ Pozisyon kontrolü hatası: {e}")
+
+def start_position_monitor():
+    """
+    Pozisyon takip sistemini başlatır
+    """
+    def monitor_loop():
+        while True:
+            check_and_add_sl_tp()
+            time.sleep(position_check_interval)
+    
+    monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
+    monitor_thread.start()
+    print("🔍 Pozisyon takip sistemi başlatıldı (15 saniye aralıklarla)")
+
+# Pozisyon takip sistemini başlat
+start_position_monitor()
+
 # === Telegram Mesaj Kuyruğu ve İşleyici ===
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
@@ -369,13 +464,21 @@ def webhook():
             orderType="Market",
             qty=quantity_str_for_bybit,  # Bybit'e string hali gönderildi
             timeInForce="GoodTillCancel",
-            stopLoss=str(sl_rounded),
-            takeProfit=str(tp_rounded)
         )
 
         print(f"✅ Emir gönderildi: {order}")
 
         if order and order.get('retCode') == 0:
+            # Bybit hassasiyetine uygun hesaplanmış değerleri dict'e ekle
+            position_data[symbol] = {
+                'sl_rounded': sl_rounded,  # ✅ Bybit hassasiyetine uygun SL
+                'tp_rounded': tp_rounded,  # ✅ Bybit hassasiyetine uygun TP
+                'side': side_for_bybit,
+                'entry_rounded': entry_rounded,  # ✅ Giriş fiyatı da tutalım
+                'timestamp': time.time()
+            }
+            print(f"✅ {symbol} pozisyonu dict'e eklendi (SL: {sl_rounded}, TP: {tp_rounded})")
+            send_telegram_message_to_queue(f"✅ {symbol} pozisyonu dict'e eklendi (15s içinde SL/TP eklenecek)")
             order_info = order.get('result', {})
             success_message = (
                 f"<b>✅ Bybit Emir Başarılı!</b>\n"
