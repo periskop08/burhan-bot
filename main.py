@@ -16,8 +16,12 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
-BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
-BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
+# Bybit API bilgileri
+# BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
+# BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
+
+BYBIT_API_KEY = os.getenv("BYBIT_API_KEY", "WnsW3MlMksMGwkYT2J")
+BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET", "y5Hjqj6aaVHGKoZmRPZ80W3GQJJhjQkQRl93")
 
 BYBIT_TESTNET_MODE = os.getenv("BYBIT_TESTNET_MODE", "False").lower() in ('true', '1', 't')
 
@@ -35,66 +39,122 @@ def check_and_add_sl_tp():
         session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
         
         # Açık pozisyonları al
-        positions_response = session.get_positions(category="linear")
+        positions_response = session.get_positions(category="linear", settleCoin="USDT")
         
         if positions_response and positions_response.get('retCode') == 0:
             positions = positions_response.get('result', {}).get('list', [])
+            
+            print(f"🔍 Pozisyon kontrolü: {len(positions)} pozisyon bulundu")
             
             for position in positions:
                 symbol = position.get('symbol')
                 side = position.get('side')
                 size = float(position.get('size', 0))
+                avgPrice = float(position.get('avgPrice', 0))  # Pozisyonun ortalama fiyatı
                 
                 # Sadece açık pozisyonları kontrol et
-                if size > 0:
+                if size > 0 and avgPrice > 0:
+                    print(f"📊 {symbol} pozisyonu kontrol ediliyor: {side}, {size}, Ortalama Fiyat: {avgPrice}")
+                    
                     # Pozisyonun SL/TP'si var mı kontrol et
                     stopLoss = position.get('stopLoss')
                     takeProfit = position.get('takeProfit')
                     
-                    # SL/TP yoksa ve bizim listemizde varsa
-                    if (not stopLoss or not takeProfit) and symbol in position_data:
-                        position_info = position_data[symbol]
+                    print(f"🔍 {symbol} - Mevcut SL: {stopLoss}, TP: {takeProfit}")
+                    
+                    # SL/TP yoksa her pozisyon için hesapla ve ekle
+                    if not stopLoss or not takeProfit:
+                        print(f"✅ {symbol} için SL/TP hesaplanıyor ve ekleniyor...")
+                        
+                        # Bybit'ten tick size al
+                        try:
+                            exchange_info_response = session.get_instruments_info(category="linear", symbol=symbol)
+                            tick_size = 0.000001  # Varsayılan
+                            
+                            if exchange_info_response and exchange_info_response['retCode'] == 0:
+                                instrument_info = exchange_info_response['result']['list'][0]
+                                price_filter = instrument_info.get('priceFilter', {})
+                                if 'tickSize' in price_filter:
+                                    tick_size = float(price_filter['tickSize'])
+                        except:
+                            tick_size = 0.000001
+                        
+                        # TP/SL hesapla (sabit yüzdelik değerler)
+                        if side == "Buy":  # Long pozisyon
+                            sl_price = round_to_precision(avgPrice * 0.985, tick_size)  # %1.5 altında
+                            tp_price = round_to_precision(avgPrice * 1.03, tick_size)   # %3 üstünde
+                        else:  # Short pozisyon
+                            sl_price = round_to_precision(avgPrice * 1.015, tick_size)  # %1.5 üstünde
+                            tp_price = round_to_precision(avgPrice * 0.97, tick_size)   # %3 altında
+                        
+                        print(f"💰 {symbol} için hesaplanan SL: {sl_price}, TP: {tp_price}")
                         
                         # SL/TP ekle
                         try:
+                            sl_order = None
+                            tp_order = None
+                            
                             # SL emri ekle
                             if not stopLoss:
-                                sl_order = session.place_order(
-                                    category="linear",
-                                    symbol=symbol,
-                                    side="Sell" if side == "Buy" else "Buy",
-                                    orderType="StopMarket",
-                                    qty=str(size),
-                                    stopPrice=str(position_info['sl_rounded']),  # ✅ Bybit hassasiyetine uygun SL
-                                    timeInForce="GoodTillCancel"
-                                )
+                                print(f"🛑 {symbol} için SL ayarlanıyor: {sl_price}")
+                                try:
+                                    # Pozisyon TP/SL ayarlama
+                                    sl_order = session.set_trading_stop(
+                                        category="linear",
+                                        symbol=symbol,
+                                        stopLoss=str(sl_price),
+                                        slOrderType="Market",
+                                        positionIdx=2,
+                                        tpslMode="Full"
+                                    )
+                                    print(f"🛑 {symbol} SL ayarlama yanıtı: {sl_order}")
+                                except Exception as e:
+                                    print(f"❌ {symbol} SL ayarlama hatası: {e}")
+                                    sl_order = None
+                                print(f"🛑 {symbol} SL emri yanıtı: {sl_order}")
                                 if sl_order and sl_order.get('retCode') == 0:
-                                    print(f"✅ {symbol} için SL emri eklendi: {position_info['sl_rounded']}")
-                                    send_telegram_message_to_queue(f"✅ {symbol} için SL emri eklendi: {position_info['sl_rounded']}")
+                                    print(f"✅ {symbol} için SL emri eklendi: {sl_price}")
+                                    send_telegram_message_to_queue(f"✅ {symbol} için SL emri eklendi: {sl_price}")
+                                else:
+                                    print(f"❌ {symbol} için SL emri başarısız: {sl_order}")
                             
                             # TP emri ekle
                             if not takeProfit:
-                                tp_order = session.place_order(
-                                    category="linear",
-                                    symbol=symbol,
-                                    side="Sell" if side == "Buy" else "Buy",
-                                    orderType="Limit",
-                                    qty=str(size),
-                                    price=str(position_info['tp_rounded']),  # ✅ Bybit hassasiyetine uygun TP
-                                    timeInForce="GoodTillCancel"
-                                )
+                                print(f"💰 {symbol} için TP ayarlanıyor: {tp_price}")
+                                try:
+                                    # Pozisyon TP/SL ayarlama
+                                    tp_order = session.set_trading_stop(
+                                        category="linear",
+                                        symbol=symbol,
+                                        takeProfit=str(tp_price),
+                                        tpOrderType="Market",
+                                        positionIdx=2,
+                                        tpslMode="Full"
+                                    )
+                                    print(f"💰 {symbol} TP ayarlama yanıtı: {tp_order}")
+                                except Exception as e:
+                                    print(f"❌ {symbol} TP ayarlama hatası: {e}")
+                                    tp_order = None
+                                print(f"💰 {symbol} TP emri yanıtı: {tp_order}")
                                 if tp_order and tp_order.get('retCode') == 0:
-                                    print(f"✅ {symbol} için TP emri eklendi: {position_info['tp_rounded']}")
-                                    send_telegram_message_to_queue(f"✅ {symbol} için TP emri eklendi: {position_info['tp_rounded']}")
+                                    print(f"✅ {symbol} için TP emri eklendi: {tp_price}")
+                                    send_telegram_message_to_queue(f"✅ {symbol} için TP emri eklendi: {tp_price}")
+                                else:
+                                    print(f"❌ {symbol} için TP emri başarısız: {tp_order}")
                             
-                            # SL/TP eklendiyse listeden çıkar
-                            if (sl_order and sl_order.get('retCode') == 0) or (tp_order and tp_order.get('retCode') == 0):
-                                del position_data[symbol]
-                                print(f"✅ {symbol} pozisyonu SL/TP ile tamamlandı")
+                            # Başarılı ekleme durumunda bilgi ver
+                            sl_success = sl_order and sl_order.get('retCode') == 0
+                            tp_success = tp_order and tp_order.get('retCode') == 0
+                            
+                            if sl_success or tp_success:
+                                print(f"✅ {symbol} pozisyonu için SL/TP eklendi")
+                                send_telegram_message_to_queue(f"✅ {symbol} pozisyonu için SL/TP eklendi")
                                 
                         except Exception as e:
                             print(f"❌ {symbol} için SL/TP eklenirken hata: {e}")
                             send_telegram_message_to_queue(f"❌ {symbol} için SL/TP eklenirken hata: {e}")
+                    else:
+                        print(f"ℹ️ {symbol} zaten SL/TP'ye sahip")
                             
     except Exception as e:
         print(f"❌ Pozisyon kontrolü sırasında hata: {e}")
@@ -105,21 +165,33 @@ def start_position_monitor():
     Pozisyon takip sistemini başlatır
     """
     def monitor_loop():
+        print("🔄 Pozisyon takip döngüsü başlatıldı")
         while True:
-            check_and_add_sl_tp()
-            time.sleep(position_check_interval)
+            try:
+                check_and_add_sl_tp()
+                print(f"⏰ {position_check_interval} saniye bekleniyor...")
+                time.sleep(position_check_interval)
+            except Exception as e:
+                print(f"❌ Pozisyon takip döngüsünde hata: {e}")
+                send_telegram_message_to_queue(f"❌ Pozisyon takip döngüsü hatası: {e}")
+                time.sleep(5)  # Hata durumunda 5 saniye bekle
     
     monitor_thread = threading.Thread(target=monitor_loop, daemon=True)
     monitor_thread.start()
     print("🔍 Pozisyon takip sistemi başlatıldı (15 saniye aralıklarla)")
-
-# Pozisyon takip sistemini başlat
-start_position_monitor()
+    send_telegram_message_to_queue("🔍 Pozisyon takip sistemi başlatıldı (15 saniye aralıklarla)")
 
 # === Telegram Mesaj Kuyruğu ve İşleyici ===
 telegram_message_queue = Queue()
 LAST_TELEGRAM_MESSAGE_TIME = 0
 TELEGRAM_RATE_LIMIT_DELAY = 1.0  # Telegram'a en az 1 saniyede bir mesaj gönder (kullanıcının önceki çalışan sistemine göre)
+
+
+def send_telegram_message_to_queue(message_text):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil. Mesaj kuyruğa eklenemedi.")
+        return
+    telegram_message_queue.put(message_text)
 
 
 def telegram_message_sender():
@@ -159,12 +231,8 @@ def telegram_message_sender():
 telegram_sender_thread = threading.Thread(target=telegram_message_sender, daemon=True)
 telegram_sender_thread.start()
 
-
-def send_telegram_message_to_queue(message_text):
-    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        print("Telegram BOT_TOKEN veya CHAT_ID ortam değişkenlerinde tanımlı değil. Mesaj kuyruğa eklenemedi.")
-        return
-    telegram_message_queue.put(message_text)
+# Pozisyon takip sistemini başlat
+start_position_monitor()
 
 
 # === Yardımcı Fonksiyon: Fiyatları hassasiyete yuvarlama (float döndürür) ===
@@ -456,15 +524,29 @@ def webhook():
             sl_rounded = round_to_precision(entry_rounded * 1.015, tick_size)
             tp_rounded = round_to_precision(entry_rounded * 0.97, tick_size)
 
+        # Emir türü seçimi (Market veya Limit)
+        order_type = data.get("orderType", "Market")  # Varsayılan Market
+        if order_type not in ["Market", "Limit"]:
+            order_type = "Market"  # Geçersizse Market kullan
+        
+        # Emir parametreleri
+        order_params = {
+            "category": "linear",
+            "symbol": symbol,
+            "side": side_for_bybit,
+            "orderType": order_type,
+            "qty": quantity_str_for_bybit,
+            "timeInForce": "GoodTillCancel",
+        }
+        
+        # Limit emir için fiyat ekle
+        if order_type == "Limit":
+            order_params["price"] = str(entry_rounded)
+        
+        print(f"📤 Emir gönderiliyor: {order_type} - {symbol} - {side_for_bybit} - {quantity_str_for_bybit}")
+        
         # Bybit'e emir gönder
-        order = session.place_order(
-            category="linear",
-            symbol=symbol,
-            side=side_for_bybit,
-            orderType="Market",
-            qty=quantity_str_for_bybit,  # Bybit'e string hali gönderildi
-            timeInForce="GoodTillCancel",
-        )
+        order = session.place_order(**order_params)
 
         print(f"✅ Emir gönderildi: {order}")
 
@@ -479,6 +561,14 @@ def webhook():
             }
             print(f"✅ {symbol} pozisyonu dict'e eklendi (SL: {sl_rounded}, TP: {tp_rounded})")
             send_telegram_message_to_queue(f"✅ {symbol} pozisyonu dict'e eklendi (15s içinde SL/TP eklenecek)")
+            
+            # Hemen SL/TP eklemeyi dene (15 saniye beklemeden)
+            try:
+                print(f"🚀 {symbol} için hemen SL/TP ekleniyor...")
+                check_and_add_sl_tp()
+            except Exception as e:
+                print(f"⚠️ {symbol} için hemen SL/TP eklenirken hata: {e}")
+                send_telegram_message_to_queue(f"⚠️ {symbol} için hemen SL/TP eklenirken hata: {e}")
             order_info = order.get('result', {})
             success_message = (
                 f"<b>✅ Bybit Emir Başarılı!</b>\n"
@@ -521,7 +611,46 @@ def webhook():
 def home():
     return "Burhan-Bot aktif 💪"
 
+@app.route("/debug", methods=["GET"])
+def debug():
+    """
+    Debug endpoint'i - pozisyon durumunu gösterir
+    """
+    try:
+        session = HTTP(api_key=BYBIT_API_KEY, api_secret=BYBIT_API_SECRET, testnet=BYBIT_TESTNET_MODE)
+        positions_response = session.get_positions(category="linear", settleCoin="USDT")
+        
+        debug_info = {
+            "position_data": position_data,
+            "positions_count": 0,
+            "positions": []
+        }
+        
+        if positions_response and positions_response.get('retCode') == 0:
+            positions = positions_response.get('result', {}).get('list', [])
+            debug_info["positions_count"] = len(positions)
+            
+            for position in positions:
+                symbol = position.get('symbol')
+                side = position.get('side')
+                size = float(position.get('size', 0))
+                
+                if size > 0:
+                    debug_info["positions"].append({
+                        "symbol": symbol,
+                        "side": side,
+                        "size": size,
+                        "stopLoss": position.get('stopLoss'),
+                        "takeProfit": position.get('takeProfit'),
+                        "in_our_list": symbol in position_data
+                    })
+        
+        return jsonify(debug_info)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 if __name__ == "__main__":
     # Sadece yerel geliştirme için kullanılır
-    app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
+    app.run(debug=True, port=int(os.environ.get("PORT", 5001)))
