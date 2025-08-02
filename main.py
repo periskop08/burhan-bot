@@ -104,7 +104,6 @@ def check_and_add_sl_tp():
                                         symbol=symbol,
                                         stopLoss=str(sl_price),
                                         slOrderType="Market",
-                                        positionIdx=0,
                                         tpslMode="Full"
                                     )
                                     print(f"🛑 {symbol} SL ayarlama yanıtı: {sl_order}")
@@ -128,7 +127,6 @@ def check_and_add_sl_tp():
                                         symbol=symbol,
                                         takeProfit=str(tp_price),
                                         tpOrderType="Market",
-                                        positionIdx=0,
                                         tpslMode="Full"
                                     )
                                     print(f"💰 {symbol} TP ayarlama yanıtı: {tp_order}")
