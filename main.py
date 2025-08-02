@@ -653,4 +653,4 @@ def debug():
 
 if __name__ == "__main__":
     # Sadece yerel geliştirme için kullanılır
-    app.run(debug=True, port=int(os.environ.get("PORT", 5001)))
+    app.run(debug=True, port=int(os.environ.get("PORT", 5000)))
